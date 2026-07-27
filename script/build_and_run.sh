@@ -25,6 +25,7 @@ for arg in "$@"; do
   esac
 done
 APP_NAME="MiniSlack"
+HELPER_NAME="MiniSlackKeychainHelper"
 BUNDLE_ID="com.hamsti.minislack"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +36,9 @@ STAGING_DIR="$(mktemp -d /private/tmp/mini-slack-app.XXXXXX)"
 STAGED_APP_BUNDLE="$STAGING_DIR/$APP_NAME.app"
 STAGED_APP_CONTENTS="$STAGED_APP_BUNDLE/Contents"
 STAGED_APP_MACOS="$STAGED_APP_CONTENTS/MacOS"
+STAGED_APP_HELPERS="$STAGED_APP_CONTENTS/Helpers"
 STAGED_APP_BINARY="$STAGED_APP_MACOS/$APP_NAME"
+STAGED_HELPER_BINARY="$STAGED_APP_HELPERS/$HELPER_NAME"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
 cleanup() {
@@ -45,25 +48,31 @@ trap cleanup EXIT
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
-swift build --package-path "$ROOT_DIR" --configuration "$BUILD_CONFIGURATION"
+swift build \
+  --package-path "$ROOT_DIR" \
+  --configuration "$BUILD_CONFIGURATION" \
+  --product "$APP_NAME"
+swift build \
+  --package-path "$ROOT_DIR" \
+  --configuration "$BUILD_CONFIGURATION" \
+  --product "$HELPER_NAME"
 BUILD_BINARY="$(
   swift build \
     --package-path "$ROOT_DIR" \
     --configuration "$BUILD_CONFIGURATION" \
     --show-bin-path
 )/$APP_NAME"
+BUILD_HELPER_BINARY="$(dirname "$BUILD_BINARY")/$HELPER_NAME"
 
-mkdir -p "$STAGED_APP_MACOS"
+mkdir -p "$STAGED_APP_MACOS" "$STAGED_APP_HELPERS"
 cp "$BUILD_BINARY" "$STAGED_APP_BINARY"
+cp "$BUILD_HELPER_BINARY" "$STAGED_HELPER_BINARY"
 chmod +x "$STAGED_APP_BINARY"
+chmod +x "$STAGED_HELPER_BINARY"
 plutil -lint "$INFO_PLIST_SOURCE" >/dev/null
 cp "$INFO_PLIST_SOURCE" "$STAGED_APP_CONTENTS/Info.plist"
 
-# Sign with a stable identity rather than ad-hoc. An ad-hoc signature changes
-# the app's cdhash on every build, which invalidates the keychain ACL entries
-# for the stored Slack credentials — macOS then asks for the login keychain
-# password once per item on every launch. A persistent self-signed certificate
-# keeps the code requirement stable across rebuilds, so "Always Allow" sticks.
+# Keep the Keychain helper's code identity stable across app rebuilds.
 CODESIGN_IDENTITY="${MINISLACK_CODESIGN_IDENTITY:-MiniSlack Local Development}"
 
 # Note: a self-signed identity is untrusted, so `find-identity -v` excludes it;
@@ -122,7 +131,17 @@ else
 fi
 
 xattr -cr "$STAGED_APP_BUNDLE"
-codesign --force --timestamp=none --sign "$SIGN_IDENTITY" "$STAGED_APP_BUNDLE"
+codesign \
+  --force \
+  --timestamp=none \
+  --identifier "com.hamsti.minislack.keychain-helper" \
+  --sign "$SIGN_IDENTITY" \
+  "$STAGED_HELPER_BINARY"
+codesign \
+  --force \
+  --timestamp=none \
+  --sign "$SIGN_IDENTITY" \
+  "$STAGED_APP_BUNDLE"
 codesign --verify --deep --strict "$STAGED_APP_BUNDLE"
 
 mkdir -p "$DIST_DIR"

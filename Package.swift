@@ -6,7 +6,11 @@ let package = Package(
     name: "MiniSlack",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "MiniSlack", targets: ["MiniSlack"])
+        .executable(name: "MiniSlack", targets: ["MiniSlack"]),
+        .executable(
+            name: "MiniSlackKeychainHelper",
+            targets: ["MiniSlackKeychainHelper"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/divadretlaw/EmojiText", from: "4.4.0")
@@ -21,6 +25,10 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
+        ),
+        .executableTarget(
+            name: "MiniSlackKeychainHelper",
+            path: "Sources/MiniSlackKeychainHelper"
         ),
         .testTarget(
             name: "MiniSlackTests",

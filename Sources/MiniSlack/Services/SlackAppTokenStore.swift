@@ -14,76 +14,28 @@ protocol SlackClientIDStoring: Sendable {
 }
 
 struct SlackAppTokenStore: SlackAppTokenStoring, Sendable {
-    enum StoreError: LocalizedError {
-        case keychain(OSStatus)
+    typealias StoreError = SlackKeychainStoreError
 
-        var errorDescription: String? {
-            switch self {
-            case let .keychain(status):
-                "Keychain operation failed with status \(status)."
-            }
-        }
-    }
-
-    private let service = "com.hamsti.minislack.slack"
     private let account = "socket-mode-app-token"
 
     func load() throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound {
+        guard let data = try SlackKeychainItem.read(account: account) else {
             return nil
         }
-        guard status == errSecSuccess,
-              let data = result as? Data,
+        guard
               let token = String(data: data, encoding: .utf8)
         else {
-            throw StoreError.keychain(status)
+            throw StoreError.keychain(errSecDecode)
         }
         return token
     }
 
     func save(_ token: String) throws {
-        let data = Data(token.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
-        ]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var addQuery = query
-            attributes.forEach { addQuery[$0.key] = $0.value }
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw StoreError.keychain(addStatus)
-            }
-        } else if status != errSecSuccess {
-            throw StoreError.keychain(status)
-        }
+        try SlackKeychainItem.write(Data(token.utf8), account: account)
     }
 
     func delete() throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw StoreError.keychain(status)
-        }
+        try SlackKeychainItem.delete(account: account)
     }
 }
 
@@ -104,64 +56,25 @@ struct SlackClientIDStore: SlackClientIDStoring, Sendable {
 }
 
 private struct SlackKeychainStringStore: Sendable {
-    private let service = "com.hamsti.minislack.slack"
     let account: String
 
     func load() throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound {
+        guard let data = try SlackKeychainItem.read(account: account) else {
             return nil
         }
-        guard status == errSecSuccess,
-              let data = result as? Data,
+        guard
               let value = String(data: data, encoding: .utf8)
         else {
-            throw SlackAppTokenStore.StoreError.keychain(status)
+            throw SlackAppTokenStore.StoreError.keychain(errSecDecode)
         }
         return value
     }
 
     func save(_ value: String) throws {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
-        ]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var addQuery = query
-            attributes.forEach { addQuery[$0.key] = $0.value }
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw SlackAppTokenStore.StoreError.keychain(addStatus)
-            }
-        } else if status != errSecSuccess {
-            throw SlackAppTokenStore.StoreError.keychain(status)
-        }
+        try SlackKeychainItem.write(Data(value.utf8), account: account)
     }
 
     func delete() throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw SlackAppTokenStore.StoreError.keychain(status)
-        }
+        try SlackKeychainItem.delete(account: account)
     }
 }
