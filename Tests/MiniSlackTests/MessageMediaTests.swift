@@ -224,6 +224,79 @@ struct MessageMediaTests {
     }
 
     @Test
+    func preservesLinkedContextWhenMessageHasNoAttachment() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "Triaged K16-886 as a bug and opened a fix PR.",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "Triaged K16-886 as a bug and opened a fix PR."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "<cursor://open/composer|Open in Cursor> · Composer 2.5 · <https://linear.app/k16/issue/K16-886|Triage Linear issues for internal-admin> · <https://github.com/k16-solutions/internal-admin/pull/123|View PR>"
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let context = try #require(message.context)
+
+        #expect(message.attachments.isEmpty)
+        #expect(
+            context.plainText
+                == "Open in Cursor · Composer 2.5 · "
+                    + "Triage Linear issues for internal-admin · View PR"
+        )
+        guard case let .section(runs) = context.blocks[0] else {
+            Issue.record("Expected context links in a rich text section")
+            return
+        }
+        #expect(
+            runs.contains {
+                $0.content == .link(
+                    url: "cursor://open/composer",
+                    label: "Open in Cursor"
+                )
+            }
+        )
+        #expect(
+            runs.contains {
+                $0.content == .link(
+                    url: "https://github.com/k16-solutions/internal-admin/pull/123",
+                    label: "View PR"
+                )
+            }
+        )
+
+        let cached = try JSONDecoder().decode(
+            Message.self,
+            from: JSONEncoder().encode(message)
+        )
+        #expect(cached.context == context)
+    }
+
+    @Test
     func derivesFooterFromAttachmentContextBlocksWhenClassicFieldsMissing() throws {
         let json = """
         {

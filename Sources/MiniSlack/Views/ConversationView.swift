@@ -655,6 +655,16 @@ struct MessageRow: View {
                         .textSelection(.enabled)
                 }
 
+                if !message.isDeleted, let context = message.context {
+                    MessageRichTextView(
+                        document: context,
+                        customEmojiURLs: customEmojiURLs
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                }
+
                 if !message.isDeleted,
                    (
                        !message.attachments.isEmpty

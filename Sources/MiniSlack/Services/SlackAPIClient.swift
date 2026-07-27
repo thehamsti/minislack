@@ -1215,6 +1215,13 @@ struct SlackMessageDTO: Decodable {
                 )
             }
         }
+        let messageContext = resolvedAttachments.isEmpty
+            ? SlackRichTextParser.parseContext(
+                blocks: blocks ?? [],
+                context: context,
+                messageEmoji: emojiUnicode
+            )
+            : nil
         return Message(
             id: clientMessageID.flatMap(UUID.init(uuidString:)) ?? UUID(),
             author: authorUser?.displayName ?? resolvedIntegration?.name ?? username ?? "Slack",
@@ -1226,6 +1233,7 @@ struct SlackMessageDTO: Decodable {
             isCurrentUser: user == currentUserID,
             displayBody: displayBody,
             richText: isDeleted ? nil : richText,
+            context: isDeleted ? nil : messageContext,
             integration: resolvedIntegration,
             attachments: resolvedAttachments,
             files: (files ?? []).map(\.file),

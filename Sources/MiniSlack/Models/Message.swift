@@ -11,6 +11,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     let isCurrentUser: Bool
     var displayBody: String
     var richText: MessageRichText?
+    let context: MessageRichText?
     let integration: MessageIntegration?
     let attachments: [MessageAttachment]
     let files: [MessageFile]
@@ -34,6 +35,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         isCurrentUser: Bool = false,
         displayBody: String? = nil,
         richText: MessageRichText? = nil,
+        context: MessageRichText? = nil,
         integration: MessageIntegration? = nil,
         attachments: [MessageAttachment] = [],
         files: [MessageFile] = [],
@@ -59,6 +61,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             messageEmoji: emojiUnicode
         )
         self.richText = richText
+        self.context = context
         self.integration = integration
         self.attachments = attachments
         self.files = files
@@ -129,6 +132,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
                     messageEmoji: emojiUnicode
                 ),
             richText: richText?.resolving(context: context, messageEmoji: emojiUnicode),
+            context: self.context?.resolving(
+                context: context,
+                messageEmoji: emojiUnicode
+            ),
             integration: integration,
             attachments: attachments.map {
                 $0.resolving(context: context, messageEmoji: emojiUnicode)
@@ -167,6 +174,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         case isCurrentUser
         case displayBody
         case richText
+        case context
         case integration
         case attachments
         case files
@@ -203,6 +211,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             messageEmoji: emojiUnicode
         )
         richText = try container.decodeIfPresent(MessageRichText.self, forKey: .richText)
+        context = try container.decodeIfPresent(MessageRichText.self, forKey: .context)
         integration = try container.decodeIfPresent(
             MessageIntegration.self,
             forKey: .integration
