@@ -205,6 +205,12 @@ enum SlackMrkdwn {
         // Slack does not bold empty or whitespace-leading spans.
         if nextChar == delimiter.rawValue { return false }
         if nextChar.isWhitespace { return false }
+        if delimiter == .italic, index > slice.startIndex {
+            let previous = slice[slice.index(before: index)]
+            if previous.isLetter || previous.isNumber {
+                return false
+            }
+        }
         return true
     }
 
@@ -231,7 +237,11 @@ enum SlackMrkdwn {
             }
             if ch == delimiter.rawValue {
                 let prev = slice.index(before: index)
-                if prev > opening, !slice[prev].isWhitespace {
+                let next = slice.index(after: index)
+                let closesWord = delimiter != .italic
+                    || next == slice.endIndex
+                    || (!slice[next].isLetter && !slice[next].isNumber)
+                if prev > opening, !slice[prev].isWhitespace, closesWord {
                     return index
                 }
             }

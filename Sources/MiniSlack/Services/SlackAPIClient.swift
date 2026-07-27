@@ -1473,6 +1473,7 @@ struct SlackRichTextNode: Decodable {
     let titleObject: SlackTextObjectDTO?
     let slackFile: SlackImageBlockFileDTO?
     let elements: [SlackRichTextNode]?
+    let fields: [SlackRichTextNode]?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1493,6 +1494,7 @@ struct SlackRichTextNode: Decodable {
         case titleObject = "title"
         case slackFile = "slack_file"
         case elements
+        case fields
     }
 
     init(from decoder: Decoder) throws {
@@ -1526,10 +1528,11 @@ struct SlackRichTextNode: Decodable {
             forKey: .slackFile
         )
         elements = try container.decodeIfPresent([SlackRichTextNode].self, forKey: .elements)
+        fields = try container.decodeIfPresent([SlackRichTextNode].self, forKey: .fields)
     }
 
     var emoji: [SlackRichTextNode] {
-        let nested = (elements ?? []).flatMap(\.emoji)
+        let nested = ((elements ?? []) + (fields ?? [])).flatMap(\.emoji)
         return type == "emoji" ? [self] + nested : nested
     }
 }

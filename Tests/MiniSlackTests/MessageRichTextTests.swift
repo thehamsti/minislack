@@ -190,6 +190,77 @@ struct MessageRichTextTests {
     }
 
     @Test
+    func rendersAppMessagesBuiltFromStandardBlockKitSections() throws {
+        let json = """
+        {
+          "ts": "1785187716.000000",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "username": "Amazon Q",
+          "text": "",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":mega: <https://example.com/event|AWS Health Event | us-east-2 | Account: 045753643074 | open>"
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "Event type code: AWS_VPN_REDUNDANCY_LOSS\\n\\nYou are receiving this message because your VPN Connection had a momentary lapse of redundancy."
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Affected resources (showing 1 of 1)*"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "`vpn-0af49cea81c258ab8`"
+                }
+              ]
+            },
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "Start time: Mon, 27 Jul 2026 21:28:36 GMT"
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+
+        let message = dto.message(users: [:], currentUserID: "")
+        let richText = try #require(message.richText)
+
+        #expect(richText.blocks.count == 4)
+        #expect(
+            richText.plainText
+                == "📣 AWS Health Event | us-east-2 | Account: 045753643074 | open\n"
+                    + "Event type code: AWS_VPN_REDUNDANCY_LOSS\n\n"
+                    + "You are receiving this message because your VPN Connection "
+                    + "had a momentary lapse of redundancy.\n"
+                    + "Affected resources (showing 1 of 1)\n"
+                    + "vpn-0af49cea81c258ab8"
+        )
+        #expect(
+            message.context?.plainText
+                == "Start time: Mon, 27 Jul 2026 21:28:36 GMT"
+        )
+        #expect(message.copyText == richText.plainText)
+    }
+
+    @Test
     func preservesPerElementSkinTonesWhenNamesRepeat() throws {
         let json = """
         {

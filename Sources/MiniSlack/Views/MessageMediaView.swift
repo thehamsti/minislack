@@ -45,6 +45,7 @@ private struct MessageAttachmentCard: View {
     let attachment: MessageAttachment
     let customEmojiURLs: [String: URL]
     @Environment(\.openURL) private var openURL
+    @State private var isTextExpanded = false
 
     /// Prefer the unfurl target, then author/service URLs when present.
     private var primaryDestination: URL? {
@@ -96,6 +97,15 @@ private struct MessageAttachmentCard: View {
                         customEmojiURLs: customEmojiURLs
                     )
                     .font(.callout)
+                    .lineLimit(isTextExpanded ? nil : 8)
+
+                    if text.display.count > 500 {
+                        Button(isTextExpanded ? "Show less" : "Show more") {
+                            isTextExpanded.toggle()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                    }
                 }
 
                 ForEach(Array(attachment.fields.enumerated()), id: \.offset) { _, field in

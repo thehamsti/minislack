@@ -3,6 +3,21 @@ import Testing
 
 struct SlackRenderingRegressionTests {
     @Test
+    func preservesUnderscoresInsideIdentifiers() {
+        let runs = SlackMrkdwn.runs(
+            in: "Event type: AWS_VPN_REDUNDANCY_LOSS and _important_",
+            context: .empty,
+            messageEmoji: [:]
+        )
+
+        #expect(
+            runs.map(\.displayText).joined()
+                == "Event type: AWS_VPN_REDUNDANCY_LOSS and important"
+        )
+        #expect(runs.last?.style.isItalic == true)
+    }
+
+    @Test
     func rendersStandardEmojiAndSkinToneModifiers() {
         let rendered = SlackEmoji.replacingUnicodeShortcodes(
             in: ":moneybag: :+1:skin-tone-3: :+1::skin-tone-3: :thumbsup::skin-tone-6:"

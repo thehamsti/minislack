@@ -99,12 +99,18 @@ struct SlackAttachmentDTO: Decodable {
         context: SlackMessageFormatting.Context,
         messageEmoji: [String: String]
     ) -> MessageAttachment? {
+        let blockContent = Self.blockContent(from: blocks)
         let contextFooter = Self.contextFooter(from: blocks)
         let resolvedFooter = footer ?? contextFooter.text
         let resolvedFooterIcon = footerIcon ?? contextFooter.iconURL
-        let resolvedTitle = Self.resolvedTitle(title)
+        let resolvedTitle = Self.resolvedTitle(title ?? blockContent.header)
         let resolvedTitleURL = titleLink.flatMap(URL.init(string:))
             ?? resolvedTitle.linkURL
+        let resolvedText = text ?? (
+            blockContent.sections.isEmpty
+                ? nil
+                : blockContent.sections.joined(separator: "\n\n")
+        )
         let attachment = MessageAttachment(
             fallback: fallback,
             color: color,
@@ -122,7 +128,7 @@ struct SlackAttachmentDTO: Decodable {
             serviceURL: serviceURL.flatMap(URL.init(string:)),
             title: resolvedTitle.display,
             titleURL: resolvedTitleURL,
-            text: text.map {
+            text: resolvedText.map {
                 MessageFormattedText(
                     raw: $0,
                     context: context,
@@ -141,6 +147,16 @@ struct SlackAttachmentDTO: Decodable {
                         isShort: field.isShort == true
                     )
                 }
+            } + blockContent.fields.map {
+                MessageAttachment.Field(
+                    title: nil,
+                    value: MessageFormattedText(
+                        raw: $0,
+                        context: context,
+                        messageEmoji: messageEmoji
+                    ),
+                    isShort: true
+                )
             },
             imageSource: imageURL
                 .flatMap(URL.init(string:))
@@ -159,6 +175,43 @@ struct SlackAttachmentDTO: Decodable {
             timestamp: timestamp.map(Date.init(timeIntervalSince1970:))
         )
         return attachment.isEmpty ? nil : attachment
+    }
+
+    private static func blockContent(
+        from blocks: [SlackRichTextNode]?
+    ) -> (header: String?, sections: [String], fields: [String]) {
+        guard let blocks else {
+            return (nil, [], [])
+        }
+        let header = blocks.first {
+            $0.type == "header" && $0.text?.isEmpty == false
+        }?.text
+        let sections: [String] = blocks.compactMap { block in
+            guard block.type == "section",
+                  let text = block.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty
+            else {
+                return nil
+            }
+            return normalizeBlockText(text)
+        }
+        let fields: [String] = blocks
+            .filter { $0.type == "section" }
+            .flatMap { $0.fields ?? [] }
+            .compactMap { field in
+                guard let text = field.text?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty
+                else {
+                    return nil
+                }
+                return normalizeBlockText(text)
+            }
+        return (header, sections, fields)
+    }
+
+    private static func normalizeBlockText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\n", with: "\n")
     }
 
     /// Pull footer text/icon from Block Kit `context` blocks when classic fields are absent.

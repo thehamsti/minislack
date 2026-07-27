@@ -7,8 +7,12 @@ enum SlackRichTextParser {
         messageEmoji: [String: String]
     ) -> MessageRichText? {
         let roots = blocks.filter { $0.type == "rich_text" }
-        guard !roots.isEmpty else {
-            return nil
+        if roots.isEmpty {
+            return parseStandardBlocks(
+                blocks,
+                context: context,
+                messageEmoji: messageEmoji
+            )
         }
 
         do {
@@ -21,6 +25,69 @@ enum SlackRichTextParser {
             return document.plainText.isEmpty ? nil : document
         } catch {
             return nil
+        }
+    }
+
+    private static func parseStandardBlocks(
+        _ blocks: [SlackRichTextNode],
+        context: SlackMessageFormatting.Context,
+        messageEmoji: [String: String]
+    ) -> MessageRichText? {
+        let parsed = blocks.flatMap { block -> [MessageRichText.Block] in
+            switch block.type {
+            case "header":
+                guard let text = block.text else {
+                    return []
+                }
+                return [
+                    .section(
+                        standardRuns(
+                            in: text,
+                            context: context,
+                            messageEmoji: messageEmoji,
+                            forceBold: true
+                        )
+                    )
+                ]
+            case "section":
+                return ([block.text] + (block.fields ?? []).map(\.text))
+                    .compactMap { $0 }
+                    .filter { !$0.isEmpty }
+                    .map {
+                        .section(
+                            standardRuns(
+                                in: $0,
+                                context: context,
+                                messageEmoji: messageEmoji
+                            )
+                        )
+                    }
+            default:
+                return []
+            }
+        }
+        let document = MessageRichText(blocks: parsed)
+        return document.plainText.isEmpty ? nil : document
+    }
+
+    private static func standardRuns(
+        in text: String,
+        context: SlackMessageFormatting.Context,
+        messageEmoji: [String: String],
+        forceBold: Bool = false
+    ) -> [MessageRichText.Run] {
+        SlackMrkdwn.runs(
+            in: text,
+            context: context,
+            messageEmoji: messageEmoji
+        )
+        .map { run in
+            guard forceBold else {
+                return run
+            }
+            var style = run.style
+            style.isBold = true
+            return MessageRichText.Run(content: run.content, style: style)
         }
     }
 
