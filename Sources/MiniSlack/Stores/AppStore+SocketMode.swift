@@ -167,6 +167,7 @@ extension AppStore {
             conversations[updatedIndex].latestActivity,
             message.timestamp
         )
+        scheduleWorkspaceStatePersist()
         if let historyCache {
             try? await historyCache.mergeLatest(
                 MessageHistoryPage(messages: [message], nextCursor: nil),

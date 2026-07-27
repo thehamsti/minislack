@@ -10,15 +10,11 @@ struct QuickSwitcherView: View {
         let showsUnreads = store.quickSwitcherShowsUnreads
         let showsActivity = store.quickSwitcherShowsActivity
         let showsSaved = store.quickSwitcherShowsSaved
-        let users = store.quickSwitcherUsers
-        let groupMessages = store.quickSwitcherGroupMessages
-        let channels = store.quickSwitcherChannels
+        let entries = store.quickSwitcherEntries
         let hasResults = showsUnreads
             || showsActivity
             || showsSaved
-            || !users.isEmpty
-            || !groupMessages.isEmpty
-            || !channels.isEmpty
+            || !entries.isEmpty
 
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -126,40 +122,24 @@ struct QuickSwitcherView: View {
                                 }
                             }
 
-                            if !users.isEmpty {
-                                quickSwitcherSection("Direct message") {
-                                    ForEach(users) { user in
-                                        resultButton(item: .user(user.id)) {
-                                            UserQuickSwitcherRow(
-                                                user: user,
-                                                customEmojiURLs: store.customEmojiURLs
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !groupMessages.isEmpty {
-                                quickSwitcherSection("Group messages") {
-                                    ForEach(groupMessages) { conversation in
-                                        resultButton(item: .channel(conversation.id)) {
-                                            ChannelQuickSwitcherRow(
-                                                store: store,
-                                                conversation: conversation
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !channels.isEmpty {
-                                quickSwitcherSection("Channels") {
-                                    ForEach(channels) { conversation in
-                                        resultButton(item: .channel(conversation.id)) {
-                                            ChannelQuickSwitcherRow(
-                                                store: store,
-                                                conversation: conversation
-                                            )
+                            if !entries.isEmpty {
+                                quickSwitcherSection("Conversations") {
+                                    ForEach(entries) { entry in
+                                        switch entry {
+                                        case let .user(user):
+                                            resultButton(item: .user(user.id)) {
+                                                UserQuickSwitcherRow(
+                                                    user: user,
+                                                    customEmojiURLs: store.customEmojiURLs
+                                                )
+                                            }
+                                        case let .conversation(conversation):
+                                            resultButton(item: .channel(conversation.id)) {
+                                                ChannelQuickSwitcherRow(
+                                                    store: store,
+                                                    conversation: conversation
+                                                )
+                                            }
                                         }
                                     }
                                 }

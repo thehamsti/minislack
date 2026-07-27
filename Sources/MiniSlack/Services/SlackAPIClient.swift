@@ -29,6 +29,7 @@ struct SlackAPIClient: Sendable {
         case http(Int)
         case rateLimited(Int)
         case slack(String)
+        case decoding(String)
         case invalidResponse
 
         var errorDescription: String? {
@@ -38,7 +39,18 @@ struct SlackAPIClient: Sendable {
             case let .rateLimited(seconds):
                 "Slack is rate limiting requests. Try again in \(seconds) seconds."
             case let .slack(error):
-                "Slack API error: \(error)."
+                switch error {
+                case "missing_scope":
+                    "Reconnect this workspace so Mini Slack can request the required access (missing_scope)."
+                case "not_in_channel":
+                    "Join this channel in Slack, then retry."
+                case "channel_not_found":
+                    "This channel is not available to the connected Slack account."
+                default:
+                    "Slack API error: \(error)."
+                }
+            case let .decoding(detail):
+                "Slack response decoding failed at \(detail)."
             case .invalidResponse:
                 "Slack returned an invalid response."
             }
@@ -335,9 +347,7 @@ struct SlackAPIClient: Sendable {
             let createdAt = dto.created
                 .map { Date(timeIntervalSince1970: TimeInterval($0)) }
                 ?? .distantPast
-            let latestActivity = latestMessage?.timestamp
-                ?? Self.date(fromSlackTimestamp: dto.lastRead)
-                ?? createdAt
+            let latestActivity = latestMessage?.timestamp ?? createdAt
 
             let kind: ConversationKind = if dto.isIM {
                 .directMessage
@@ -556,9 +566,43 @@ struct SlackAPIClient: Sendable {
             guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw APIError.http(httpResponse.statusCode)
             }
-            return try JSONDecoder().decode(T.self, from: data)
+            let decoder = JSONDecoder()
+            if let envelope = try? decoder.decode(SlackBaseResponse.self, from: data),
+               !envelope.ok
+            {
+                throw APIError.slack(envelope.error ?? "unknown_error")
+            }
+            do {
+                return try decoder.decode(T.self, from: data)
+            } catch let error as DecodingError {
+                throw APIError.decoding(Self.decodingFailureDescription(error))
+            }
         }
         throw APIError.invalidResponse
+    }
+
+    private static func decodingFailureDescription(_ error: DecodingError) -> String {
+        let path: [CodingKey]
+        let description: String
+        switch error {
+        case let .typeMismatch(_, context),
+             let .valueNotFound(_, context),
+             let .dataCorrupted(context):
+            path = context.codingPath
+            description = context.debugDescription
+        case let .keyNotFound(key, context):
+            path = context.codingPath + [key]
+            description = context.debugDescription
+        @unknown default:
+            return "an unknown field"
+        }
+        let renderedPath = path.reduce("$") { partialResult, key in
+            if let index = key.intValue {
+                return "\(partialResult)[\(index)]"
+            }
+            return "\(partialResult).\(key.stringValue)"
+        }
+        return "\(renderedPath): \(description)"
     }
 
     private static func retryDelay(attempt: Int) -> Duration {
@@ -1248,7 +1292,14 @@ struct SlackRichTextNode: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try container.decodeIfPresent(String.self, forKey: .type)
-        text = try container.decodeIfPresent(String.self, forKey: .text)
+        if let stringText = try? container.decode(String.self, forKey: .text) {
+            text = stringText
+        } else {
+            text = try container.decodeIfPresent(
+                SlackTextObjectDTO.self,
+                forKey: .text
+            )?.text
+        }
         name = try container.decodeIfPresent(String.self, forKey: .name)
         unicode = try container.decodeIfPresent(String.self, forKey: .unicode)
         skinTone = try container.decodeIfPresent(Int.self, forKey: .skinTone)

@@ -301,6 +301,7 @@ extension AppStore {
                 conversations[updatedIndex].latestActivity,
                 latest.timestamp
             )
+            scheduleWorkspaceStatePersist()
         }
 
         let incomingMessages = newMessages.filter {

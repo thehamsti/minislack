@@ -174,6 +174,7 @@ extension AppStore {
                     conversations[conversationIndex].latestActivity,
                     outgoing.createdAt
                 )
+                scheduleWorkspaceStatePersist()
                 workspaceSearchIndex.merge(
                     messages: [message],
                     conversation: conversations[conversationIndex]

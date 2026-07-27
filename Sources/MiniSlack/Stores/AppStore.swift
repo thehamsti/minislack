@@ -82,6 +82,43 @@ final class AppStore {
         case conversation(String)
     }
 
+    enum QuickSwitcherEntry: Identifiable {
+        case user(WorkspaceUser)
+        case conversation(Conversation)
+
+        var id: String {
+            switch self {
+            case let .user(user):
+                "user-\(user.id)"
+            case let .conversation(conversation):
+                "conversation-\(conversation.id)"
+            }
+        }
+
+        var user: WorkspaceUser? {
+            if case let .user(user) = self {
+                return user
+            }
+            return nil
+        }
+
+        var conversation: Conversation? {
+            if case let .conversation(conversation) = self {
+                return conversation
+            }
+            return nil
+        }
+
+        var sortTitle: String {
+            switch self {
+            case let .user(user):
+                user.displayName
+            case let .conversation(conversation):
+                conversation.title
+            }
+        }
+    }
+
     enum QuickSwitcherItem: Hashable, Identifiable {
         case unreads
         case activity
@@ -181,6 +218,10 @@ final class AppStore {
     private let workspaceLoadTimeout: Duration
     private let snapshotStoreRootURL: URL?
     private var workspaceSnapshotStore: WorkspaceSnapshotStore?
+    private var workspacePersistTask: Task<Void, Never>?
+    /// Minimum delay between workspace snapshot persists triggered by activity
+    /// updates. Internal so tests can shorten it.
+    var workspaceSnapshotPersistInterval: Duration = .seconds(30)
     static let presenceFreshnessThreshold: TimeInterval = 300
     let appTokenStore: (any SlackAppTokenStoring)?
     let clientIDStore: (any SlackClientIDStoring)?
@@ -432,39 +473,46 @@ final class AppStore {
                 .localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
     }
 
-    var quickSwitcherUsers: [WorkspaceUser] {
-        guard !normalizedQuickSwitcherQuery.isEmpty else {
-            return users
-        }
-        return users.filter {
-            $0.displayName.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
-                || $0.status.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
-        }
-    }
+    var quickSwitcherEntries: [QuickSwitcherEntry] {
+        let query = normalizedQuickSwitcherQuery
+        let activityByUserID = directMessageActivityByUserID
 
-    var quickSwitcherChannels: [Conversation] {
-        let channels = sortedByLatestActivity(
-            conversations.filter { $0.kind == .channel }
-        )
-        guard !normalizedQuickSwitcherQuery.isEmpty else {
-            return channels
+        func activity(of entry: QuickSwitcherEntry) -> Date {
+            switch entry {
+            case let .user(user):
+                activityByUserID[user.id] ?? .distantPast
+            case let .conversation(conversation):
+                conversation.latestActivity
+            }
         }
-        return channels.filter {
-            $0.title.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
-                || ($0.subtitle?.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery) ?? false)
-        }
-    }
 
-    var quickSwitcherGroupMessages: [Conversation] {
-        let groups = sortedByLatestActivity(
-            conversations.filter { $0.kind == .groupDirectMessage }
-        )
-        guard !normalizedQuickSwitcherQuery.isEmpty else {
-            return groups
+        let matchingUsers = users.filter { user in
+            query.isEmpty
+                || user.displayName.localizedCaseInsensitiveContains(query)
+                || user.status.localizedCaseInsensitiveContains(query)
         }
-        return groups.filter {
-            $0.title.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
-                || ($0.subtitle?.localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery) ?? false)
+        let matchingConversations = conversations.filter { conversation in
+            guard conversation.kind != .directMessage else {
+                return false
+            }
+            return query.isEmpty
+                || conversation.title.localizedCaseInsensitiveContains(query)
+                || (conversation.subtitle?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+
+        let entries = matchingUsers.map(QuickSwitcherEntry.user)
+            + matchingConversations.map(QuickSwitcherEntry.conversation)
+        return entries.sorted { lhs, rhs in
+            let lhsActivity = activity(of: lhs)
+            let rhsActivity = activity(of: rhs)
+            if lhsActivity != rhsActivity {
+                return lhsActivity > rhsActivity
+            }
+            let titleOrder = lhs.sortTitle.localizedCaseInsensitiveCompare(rhs.sortTitle)
+            if titleOrder != .orderedSame {
+                return titleOrder == .orderedAscending
+            }
+            return lhs.id < rhs.id
         }
     }
 
@@ -472,9 +520,7 @@ final class AppStore {
         quickSwitcherShowsUnreads
             || quickSwitcherShowsActivity
             || quickSwitcherShowsSaved
-            || !quickSwitcherUsers.isEmpty
-            || !quickSwitcherGroupMessages.isEmpty
-            || !quickSwitcherChannels.isEmpty
+            || !quickSwitcherEntries.isEmpty
     }
 
     var quickSwitcherItems: [QuickSwitcherItem] {
@@ -488,9 +534,16 @@ final class AppStore {
         if quickSwitcherShowsSaved {
             items.append(.saved)
         }
-        items.append(contentsOf: quickSwitcherUsers.map { .user($0.id) })
-        items.append(contentsOf: quickSwitcherGroupMessages.map { .channel($0.id) })
-        items.append(contentsOf: quickSwitcherChannels.map { .channel($0.id) })
+        items.append(
+            contentsOf: quickSwitcherEntries.map { entry in
+                switch entry {
+                case let .user(user):
+                    .user(user.id)
+                case let .conversation(conversation):
+                    .channel(conversation.id)
+                }
+            }
+        )
         return items
     }
 
@@ -987,6 +1040,7 @@ final class AppStore {
         )
         conversations[index].latestActivity = .now
         composerDraft = ComposerDraft()
+        scheduleWorkspaceStatePersist()
         if slackAPI != nil {
             startWorkspaceOperation { [weak self] session in
                 await self?.sendLiveMessage(
@@ -1436,6 +1490,27 @@ final class AppStore {
         persistWorkspaceState()
     }
 
+    /// Coalesces activity-driven persists so incremental sync and history
+    /// loads don't write the snapshot on every update. At most one persist
+    /// is scheduled per `workspaceSnapshotPersistInterval` window; updates
+    /// that arrive while one is pending are captured by that persist.
+    func scheduleWorkspaceStatePersist() {
+        guard workspacePersistTask == nil, credentials != nil else {
+            return
+        }
+        workspacePersistTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            try? await Task.sleep(for: workspaceSnapshotPersistInterval)
+            workspacePersistTask = nil
+            guard !Task.isCancelled else {
+                return
+            }
+            persistWorkspaceState()
+        }
+    }
+
     private func persistWorkspaceState() {
         guard let credentials else {
             return
@@ -1661,6 +1736,7 @@ final class AppStore {
                let latest = conversations[index].messages.last
             {
                 conversations[index].latestActivity = latest.timestamp
+                scheduleWorkspaceStatePersist()
                 let preference = UserDefaults.standard.object(forKey: "markReadOnOpen")
                 let shouldMarkRead = preference == nil
                     || UserDefaults.standard.bool(forKey: "markReadOnOpen")
@@ -1958,12 +2034,20 @@ final class AppStore {
         quickSwitcherQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var conversationNamesByID: [String: String] {
-        Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0.title) })
+    private var directMessageActivityByUserID: [String: Date] {
+        conversations.reduce(into: [:]) { activityByUserID, conversation in
+            guard conversation.kind == .directMessage else {
+                return
+            }
+            for userID in [conversation.participantUserID, conversation.id].compactMap({ $0 }) {
+                let existing = activityByUserID[userID] ?? .distantPast
+                activityByUserID[userID] = max(existing, conversation.latestActivity)
+            }
+        }
     }
 
-    private func sortedByLatestActivity(_ conversations: [Conversation]) -> [Conversation] {
-        sortedConversations(conversations, by: .activity)
+    var conversationNamesByID: [String: String] {
+        Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0.title) })
     }
 
     private func sortedConversations(

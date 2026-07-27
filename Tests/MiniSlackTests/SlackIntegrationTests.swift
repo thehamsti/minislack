@@ -162,6 +162,32 @@ struct SlackIntegrationTests {
     }
 
     @Test
+    func conversationActivityFallsBackToCreationDateNotLastRead() throws {
+        let conversationsJSON = """
+        [
+          {
+            "id": "C1",
+            "name": "general",
+            "is_im": false,
+            "created": 1600000000,
+            "last_read": "1700000000.000000"
+          }
+        ]
+        """
+        let conversations = try JSONDecoder().decode(
+            [SlackConversationDTO].self,
+            from: Data(conversationsJSON.utf8)
+        )
+
+        let snapshot = SlackAPIClient.makeSnapshot(users: [], conversations: conversations)
+
+        #expect(
+            snapshot.conversations.first?.latestActivity
+                == Date(timeIntervalSince1970: 1_600_000_000)
+        )
+    }
+
+    @Test
     func slackMessagesDecodeEditsThreadsPinsReactionsAndDeletion() throws {
         let json = """
         {
@@ -490,6 +516,34 @@ struct SlackIntegrationTests {
     }
 
     @Test
+    func historyErrorEnvelopeSurfacesSlackErrorBeforeSuccessSchemaDecode() async throws {
+        let token = "history-error-\(UUID().uuidString)"
+        let client = makeStubbedSlackClient(accessToken: token) { request in
+            guard request.url?.path == "/api/conversations.history" else {
+                throw SlackStubError.unexpectedRequest
+            }
+            return try slackResponse(
+                for: request,
+                json: #"{"ok":false,"error":"missing_scope"}"#
+            )
+        }
+        defer { SlackStubURLProtocol.unregister(accessToken: token) }
+
+        await #expect(throws: SlackAPIClient.APIError.slack("missing_scope")) {
+            try await client.fetchMessagePage(
+                channelID: "C1",
+                accessToken: token,
+                users: [],
+                currentUserID: "U1"
+            )
+        }
+        #expect(
+            SlackAPIClient.APIError.slack("missing_scope").localizedDescription
+                == "Reconnect this workspace so Mini Slack can request the required access (missing_scope)."
+        )
+    }
+
+    @Test
     func richTextEmojiMetadataMapsSlackShortcodesToUnicode() throws {
         let json = """
         {
@@ -524,6 +578,30 @@ struct SlackIntegrationTests {
                 messageEmoji: message.emojiUnicode
             ) == "Ship it 🎉"
         )
+    }
+
+    @Test
+    func standardBlockTextObjectDecodesAlongsideRichTextStrings() throws {
+        let json = """
+        {
+          "ts": "1700000100.000000",
+          "text": "Deployment complete",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "Deployment complete"
+              }
+            }
+          ]
+        }
+        """
+
+        let message = try JSONDecoder()
+            .decode(SlackMessageDTO.self, from: Data(json.utf8))
+
+        #expect(message.blocks?.first?.text == "Deployment complete")
     }
 
     @Test
@@ -616,7 +694,7 @@ struct SlackIntegrationTests {
         #expect(store.directConversations.isEmpty)
         #expect(store.groupDirectConversations.map(\.id) == ["G1"])
         #expect(store.channelConversations.isEmpty)
-        #expect(store.quickSwitcherGroupMessages.map(\.id) == ["G1"])
+        #expect(store.quickSwitcherEntries.contains { $0.conversation?.id == "G1" })
     }
 }
 

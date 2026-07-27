@@ -79,6 +79,8 @@ enum OutgoingMessageRetryPolicy {
             return transientSlackErrors.contains(code)
                 ? .retry(after: backoffDelay(retryCount: retryCount))
                 : .permanent
+        case .decoding:
+            return .permanent
         case .invalidResponse:
             return retryCount < 3
                 ? .retry(after: backoffDelay(retryCount: retryCount))

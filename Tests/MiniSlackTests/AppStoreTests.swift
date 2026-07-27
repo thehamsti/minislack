@@ -117,6 +117,53 @@ struct AppStoreTests {
     }
 
     @Test
+    func quickSwitcherCombinesDirectMessagesGroupsAndChannelsByLatestActivity() {
+        let alex = WorkspaceUser(id: "alex", displayName: "Alex Morgan", status: "Active", isActive: true)
+        let maya = WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true)
+        let store = AppStore(
+            conversations: [
+                conversation(id: "older-channel", unread: 0, activity: 100),
+                conversation(id: "newer-channel", unread: 0, activity: 500),
+                conversation(
+                    id: "dm-alex",
+                    kind: .directMessage,
+                    unread: 0,
+                    activity: 400,
+                    participantUserID: "alex"
+                ),
+                conversation(id: "group-chat", kind: .groupDirectMessage, unread: 0, activity: 300),
+            ],
+            users: [maya, alex]
+        )
+
+        #expect(store.quickSwitcherEntries.map(\.id) == [
+            "conversation-newer-channel",
+            "user-alex",
+            "conversation-group-chat",
+            "conversation-older-channel",
+            "user-maya",
+        ])
+    }
+
+    @Test
+    func quickSwitcherMergedListFiltersAcrossEveryKind() {
+        let maya = WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true)
+        let store = AppStore(
+            conversations: [
+                conversation(id: "general", unread: 0, activity: 100),
+                conversation(id: "maya-and-alex", kind: .groupDirectMessage, unread: 0, activity: 300),
+            ],
+            users: [maya]
+        )
+        store.quickSwitcherQuery = "maya"
+
+        #expect(store.quickSwitcherEntries.map(\.id) == [
+            "conversation-maya-and-alex",
+            "user-maya",
+        ])
+    }
+
+    @Test
     func quickSwitcherCanOpenUnreadInbox() {
         let store = AppStore(conversations: [
             conversation(id: "channel", unread: 1, activity: 100)
@@ -171,7 +218,7 @@ struct AppStoreTests {
         let store = AppStore(conversations: [], users: [user])
         store.quickSwitcherQuery = "maya"
 
-        #expect(store.quickSwitcherUsers == [user])
+        #expect(store.quickSwitcherEntries.map(\.id) == ["user-maya"])
 
         store.openFirstQuickSwitcherResult()
 
@@ -196,16 +243,16 @@ struct AppStoreTests {
         #expect(store.quickSwitcherSelection == .saved)
 
         store.moveQuickSwitcherSelection(offset: 1)
-        #expect(store.quickSwitcherSelection == .user(user.id))
+        #expect(store.quickSwitcherSelection == .channel(channel.id))
 
         store.moveQuickSwitcherSelection(offset: 1)
-        #expect(store.quickSwitcherSelection == .channel(channel.id))
+        #expect(store.quickSwitcherSelection == .user(user.id))
 
         store.moveQuickSwitcherSelection(offset: 1)
         #expect(store.quickSwitcherSelection == .unreads)
 
         store.moveQuickSwitcherSelection(offset: -1)
-        #expect(store.quickSwitcherSelection == .channel(channel.id))
+        #expect(store.quickSwitcherSelection == .user(user.id))
     }
 
     @Test
@@ -249,7 +296,7 @@ struct AppStoreTests {
         store.updateAvailability(updated, for: user.id)
 
         #expect(store.user(withID: user.id)?.availability == updated)
-        #expect(store.quickSwitcherUsers.first?.availability == updated)
+        #expect(store.quickSwitcherEntries.first?.user?.availability == updated)
     }
 
     @Test
@@ -269,11 +316,6 @@ struct AppStoreTests {
         #expect(store.directConversations.map(\.id) == ["newer-dm", "older-dm"])
         #expect(store.groupDirectConversations.map(\.id) == ["newer-group", "older-group"])
         #expect(store.favoriteConversations.map(\.id) == ["newer-favorite", "older-favorite"])
-        #expect(
-            store.quickSwitcherChannels.map(\.id)
-                == ["newer-favorite", "newer-channel", "older-favorite", "older-channel"]
-        )
-        #expect(store.quickSwitcherGroupMessages.map(\.id) == ["newer-group", "older-group"])
     }
 
     @Test
@@ -296,7 +338,8 @@ struct AppStoreTests {
         creation: TimeInterval = 0,
         unread: Int,
         mentions: Int = 0,
-        activity: TimeInterval
+        activity: TimeInterval,
+        participantUserID: String? = nil
     ) -> Conversation {
         Conversation(
             id: id,
@@ -305,6 +348,7 @@ struct AppStoreTests {
             subtitle: nil,
             isFavorite: favorite,
             createdAt: Date(timeIntervalSince1970: creation),
+            participantUserID: participantUserID,
             unreadCount: unread,
             mentionCount: mentions,
             latestActivity: Date(timeIntervalSince1970: activity),

@@ -153,6 +153,99 @@ struct IncrementalSyncStoreTests {
     }
 
     @Test
+    func polledActivityIsPersistedToWorkspaceSnapshot() async throws {
+        let token = "persist-activity-\(UUID().uuidString)"
+        let teamID = "T-\(UUID().uuidString)"
+        let rootURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let client = makeIncrementalClient(accessToken: token) { request in
+            switch request.url?.path {
+            case "/api/conversations.info":
+                try incrementalJSONResponse(
+                    request,
+                    json: """
+                    {
+                      "ok": true,
+                      "channel": {
+                        "id": "C1",
+                        "name": "general",
+                        "last_read": "100.000000"
+                      }
+                    }
+                    """
+                )
+            case "/api/conversations.history":
+                try incrementalResponse(
+                    request,
+                    messages: [
+                        """
+                        {
+                          "ts":"500.000000",
+                          "user":"U2",
+                          "text":"New activity"
+                        }
+                        """,
+                    ]
+                )
+            default:
+                throw IncrementalStubError.invalidRequest
+            }
+        }
+        defer { IncrementalURLProtocol.unregister(accessToken: token) }
+        let store = AppStore(
+            conversations: [
+                Conversation(
+                    id: "C1",
+                    title: "General",
+                    kind: .channel,
+                    isFavorite: false,
+                    unreadCount: 0,
+                    mentionCount: 0,
+                    latestActivity: Date(timeIntervalSince1970: 100),
+                    messages: []
+                ),
+            ],
+            users: [
+                WorkspaceUser(id: "U1", displayName: "You", status: "", isActive: true),
+                WorkspaceUser(id: "U2", displayName: "Maya", status: "", isActive: true),
+            ],
+            connectionState: .connected("Acme"),
+            slackAPI: client,
+            credentials: credentials(token: token, teamID: teamID, teamName: "Acme"),
+            notificationService: RecordingNotificationService(),
+            dockBadgeService: RecordingDockBadge(),
+            snapshotStoreRootURL: rootURL
+        )
+        store.workspaceSnapshotPersistInterval = .milliseconds(10)
+
+        try await store.pollConversation(
+            IncrementalSyncDecision(
+                conversationID: "C1",
+                priority: .background,
+                isInitialPoll: true
+            ),
+            detectingMessagesAfter: Date(timeIntervalSince1970: 600)
+        )
+
+        #expect(store.conversations[0].latestActivity == Date(timeIntervalSince1970: 500))
+
+        let snapshotStore = WorkspaceSnapshotStore(workspaceID: teamID, rootURL: rootURL)
+        var savedState: CachedWorkspaceState?
+        for _ in 0 ..< 100 where savedState == nil {
+            savedState = await snapshotStore.load()
+            if savedState == nil {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        #expect(
+            savedState?.snapshot.conversations.first?.latestActivity
+                == Date(timeIntervalSince1970: 500)
+        )
+        store.clearWorkspaceSession()
+    }
+
+    @Test
     func staleChannelUnreadZeroDoesNotRemoveSocketMessageFromUnreads() async throws {
         let token = "stale-channel-unread-\(UUID().uuidString)"
         let message = Message(
