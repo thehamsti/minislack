@@ -1,3 +1,4 @@
+import AppKit
 import EmojiText
 import QuickLook
 import SwiftUI
@@ -132,12 +133,19 @@ private struct MessageAttachmentCard: View {
                 }
 
                 if let source = attachment.thumbnailSource ?? attachment.imageSource {
+                    let previewSource = attachment.imageSource ?? source
                     MessageRemoteImage(
                         source: source,
                         accessibilityLabel: attachment.title
                             ?? attachment.fallback
                             ?? "Attachment image",
                         compact: attachment.thumbnailSource != nil
+                            && attachment.imageSource == nil,
+                        preview: MessageImagePreviewRequest(
+                            source: previewSource,
+                            suggestedName: attachment.title ?? "Slack image",
+                            cacheKey: "attachment-\(previewSource.url.absoluteString)"
+                        )
                     )
                 }
 
@@ -189,13 +197,30 @@ private struct MessageAttachmentCard: View {
 private struct MessageFileCard: View {
     let file: MessageFile
 
+    private var displayImageSource: MessageMediaSource? {
+        guard file.isImage else { return nil }
+        return file.thumbnailSource ?? file.contentSource
+    }
+
+    private var imagePreview: MessageImagePreviewRequest? {
+        guard let source = file.contentSource ?? file.thumbnailSource else {
+            return nil
+        }
+        return MessageImagePreviewRequest(
+            source: source,
+            suggestedName: file.name,
+            cacheKey: file.id
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if file.isImage, let source = file.thumbnailSource {
+            if let source = displayImageSource {
                 MessageRemoteImage(
                     source: source,
                     accessibilityLabel: file.altText ?? file.displayName,
-                    compact: false
+                    compact: false,
+                    preview: imagePreview
                 )
             }
 
@@ -239,8 +264,11 @@ private struct MessageFileCard: View {
             }
         }
         .padding(8)
-        .frame(maxWidth: 340, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: 360, alignment: .leading)
+        .background(
+            .quaternary.opacity(file.isImage ? 0.22 : 0.35),
+            in: RoundedRectangle(cornerRadius: file.isImage ? 8 : 6, style: .continuous)
+        )
         .accessibilityElement(children: .contain)
     }
 
@@ -271,32 +299,45 @@ private struct MessageImageCard: View {
     let image: MessageImage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             if let title = image.title {
                 Text(title)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
             if let source = image.source {
-                MessageRemoteImage(
-                    source: source,
-                    accessibilityLabel: image.altText,
-                    compact: false
-                )
-                MessageMediaActions(
-                    source: source,
-                    suggestedName: suggestedName,
-                    cacheKey: image.slackFileID
-                        ?? "image-\(source.url.host ?? "")-\(source.url.lastPathComponent)"
-                )
+                let cacheKey = image.slackFileID
+                    ?? "image-\(source.url.host ?? "")-\(source.url.lastPathComponent)"
+                ZStack(alignment: .topTrailing) {
+                    MessageRemoteImage(
+                        source: source,
+                        accessibilityLabel: image.altText,
+                        compact: false,
+                        preview: MessageImagePreviewRequest(
+                            source: source,
+                            suggestedName: suggestedName,
+                            cacheKey: cacheKey
+                        )
+                    )
+
+                    MessageMediaActions(
+                        source: source,
+                        suggestedName: suggestedName,
+                        cacheKey: cacheKey
+                    )
+                    .padding(4)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .padding(6)
+                }
             } else {
                 Label(image.altText, systemImage: "photo")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
             }
         }
-        .padding(8)
-        .frame(maxWidth: 340, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: 360, alignment: .leading)
     }
 
     private var suggestedName: String {
@@ -307,60 +348,183 @@ private struct MessageImageCard: View {
     }
 }
 
+/// Full-resolution source used when the user double-clicks a thumbnail.
+private struct MessageImagePreviewRequest: Equatable {
+    let source: MessageMediaSource
+    let suggestedName: String
+    let cacheKey: String
+}
+
 private struct MessageRemoteImage: View {
     let source: MessageMediaSource
     let accessibilityLabel: String
     let compact: Bool
+    var preview: MessageImagePreviewRequest? = nil
+
     @State private var authenticatedImage: CGImage?
+    @State private var isHovered = false
+    @State private var previewURL: URL?
+    @State private var isPreparingPreview = false
+    @State private var errorMessage: String?
+
+    private var cornerRadius: CGFloat { compact ? 5 : 8 }
 
     var body: some View {
-        Group {
-            if source.requiresSlackAuthorization {
-                if let authenticatedImage {
-                    Image(decorative: authenticatedImage, scale: 1)
+        ZStack(alignment: .bottomTrailing) {
+            imageContent
+                .frame(
+                    maxWidth: compact ? 96 : 360,
+                    maxHeight: compact ? 96 : 280,
+                    alignment: .leading
+                )
+                .clipShape(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+
+            if isPreparingPreview {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(6)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .padding(6)
+            } else if showsExpandHint {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(5)
+                    .background(.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 5))
+                    .padding(6)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(
+                    Color.primary.opacity(isHovered && preview != nil ? 0.24 : 0.1),
+                    lineWidth: 1
+                )
+        }
+        .shadow(
+            color: .black.opacity(compact ? 0 : (isHovered ? 0.14 : 0.07)),
+            radius: compact ? 0 : (isHovered ? 10 : 4),
+            y: compact ? 0 : 1
+        )
+        .contentShape(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        )
+        .onHover(perform: handleHover)
+        .onDisappear(perform: clearHoverCursor)
+        .highPriorityGesture(
+            TapGesture(count: 2).onEnded { openPreview() }
+        )
+        .help(previewHelp)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(preview == nil ? "" : "Double-click to open a larger preview")
+        .accessibilityAction(named: "Quick Look") { openPreview() }
+        .quickLookPreview($previewURL)
+        .alert(
+            "Preview failed",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.easeOut(duration: 0.12), value: isPreparingPreview)
+    }
+
+    @ViewBuilder
+    private var imageContent: some View {
+        if source.requiresSlackAuthorization {
+            if let authenticatedImage {
+                Image(decorative: authenticatedImage, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                imagePlaceholder
+                    .task(id: source) {
+                        authenticatedImage = try? await SlackFileTransferService.shared
+                            .thumbnail(from: source)
+                    }
+            }
+        } else {
+            AsyncImage(
+                url: source.url,
+                transaction: Transaction(animation: .easeOut(duration: 0.15))
+            ) { phase in
+                if case let .success(image) = phase {
+                    image
                         .resizable()
                         .interpolation(.high)
                         .scaledToFit()
                 } else {
                     imagePlaceholder
-                        .task(id: source) {
-                            authenticatedImage = try? await SlackFileTransferService.shared
-                                .thumbnail(from: source)
-                        }
-                }
-            } else {
-                AsyncImage(
-                    url: source.url,
-                    transaction: Transaction(animation: .easeOut(duration: 0.15))
-                ) { phase in
-                    if case let .success(image) = phase {
-                        image
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFit()
-                    } else {
-                        imagePlaceholder
-                    }
                 }
             }
         }
-        .frame(
-            maxWidth: compact ? 96 : 300,
-            maxHeight: compact ? 96 : 180,
-            alignment: .leading
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .accessibilityLabel(accessibilityLabel)
     }
 
     private var imagePlaceholder: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.quaternary)
             ProgressView()
                 .controlSize(.small)
         }
-        .frame(width: compact ? 76 : 220, height: compact ? 76 : 110)
+        .frame(width: compact ? 76 : 240, height: compact ? 76 : 140)
+    }
+
+    private var showsExpandHint: Bool {
+        preview != nil && isHovered && !compact
+    }
+
+    private var previewHelp: String {
+        if preview == nil {
+            return accessibilityLabel
+        }
+        return "\(accessibilityLabel) — double-click to preview"
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        if isHovered, !hovering, preview != nil {
+            NSCursor.pop()
+        } else if !isHovered, hovering, preview != nil {
+            NSCursor.pointingHand.push()
+        }
+        isHovered = hovering
+    }
+
+    private func clearHoverCursor() {
+        guard isHovered, preview != nil else {
+            isHovered = false
+            return
+        }
+        NSCursor.pop()
+        isHovered = false
+    }
+
+    private func openPreview() {
+        guard let preview, !isPreparingPreview else { return }
+        isPreparingPreview = true
+        Task {
+            do {
+                let url = try await SlackFileTransferService.shared.localURL(
+                    for: preview.source,
+                    suggestedName: preview.suggestedName,
+                    cacheKey: preview.cacheKey
+                )
+                previewURL = url
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isPreparingPreview = false
+        }
     }
 }
 
