@@ -1,0 +1,261 @@
+import Foundation
+import Testing
+@testable import MiniSlack
+
+@MainActor
+struct AppStoreTests {
+    @Test
+    func unreadInboxPrioritizesMentionsThenRecentActivity() {
+        let conversations = [
+            conversation(id: "recent", unread: 1, mentions: 0, activity: 300),
+            conversation(id: "mention", unread: 1, mentions: 1, activity: 100),
+            conversation(id: "older", unread: 1, mentions: 0, activity: 200),
+            conversation(id: "read", unread: 0, mentions: 0, activity: 400),
+        ]
+        let store = AppStore(conversations: conversations)
+
+        #expect(store.unreadConversations.map(\.id) == ["mention", "recent", "older"])
+    }
+
+    @Test
+    func unreadNavigationWrapsInBothDirections() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+        ])
+
+        store.moveToUnread(offset: 1)
+        #expect(store.destination == .conversation("one"))
+
+        store.moveToUnread(offset: -1)
+        #expect(store.destination == .conversation("two"))
+    }
+
+    @Test
+    func vimNavigationHighlightsWithoutOpeningFromUnreadInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+        ])
+
+        #expect(store.keyboardConversationID == "one")
+
+        store.handleKeyboardNavigation(.next)
+
+        #expect(store.keyboardConversationID == "two")
+        #expect(store.destination == .unreadInbox)
+
+        store.handleKeyboardNavigation(.open)
+
+        #expect(store.destination == .conversation("two"))
+    }
+
+    @Test
+    func arrowNavigationMovesBetweenConversationsAndBackToInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+            conversation(id: "read", unread: 0, activity: 100),
+        ])
+        store.select("one")
+
+        store.handleKeyboardNavigation(.next)
+        #expect(store.destination == .conversation("two"))
+
+        store.handleKeyboardNavigation(.next)
+        #expect(store.destination == .conversation("read"))
+
+        store.handleKeyboardNavigation(.back)
+        #expect(store.destination == .unreadInbox)
+        #expect(store.keyboardConversationID == "one")
+    }
+
+    @Test
+    func sendingDraftAppendsMessageAndClearsComposer() {
+        let store = AppStore(conversations: [
+            conversation(id: "channel", unread: 0, activity: 100)
+        ])
+        store.select("channel")
+        store.draft = "  Shipping this today.  "
+
+        store.sendDraft()
+
+        #expect(store.selectedConversation?.messages.last?.body == "Shipping this today.")
+        #expect(store.selectedConversation?.messages.last?.isCurrentUser == true)
+        #expect(store.draft.isEmpty)
+    }
+
+    @Test
+    func markingReadRemovesConversationFromUnreadInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "channel", unread: 4, mentions: 2, activity: 100)
+        ])
+        store.select("channel")
+
+        store.markSelectedConversationRead()
+
+        #expect(store.unreadConversations.isEmpty)
+        #expect(store.selectedConversation?.mentionCount == 0)
+    }
+
+    @Test
+    func quickSwitcherCanOpenUnreadInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "channel", unread: 1, activity: 100)
+        ])
+        store.select("channel")
+        store.quickSwitcherQuery = "unread"
+
+        #expect(store.quickSwitcherShowsUnreads)
+
+        store.openUnreadFromQuickSwitcher()
+
+        #expect(store.destination == .unreadInbox)
+        #expect(store.quickSwitcherQuery.isEmpty)
+    }
+
+    @Test
+    func quickSwitcherPresentationIsWindowScoped() {
+        let focusedWindow = WindowState()
+        let backgroundWindow = WindowState()
+
+        focusedWindow.presentQuickSwitcher()
+
+        #expect(focusedWindow.isQuickSwitcherPresented)
+        #expect(!backgroundWindow.isQuickSwitcherPresented)
+    }
+
+    @Test
+    func quickSwitcherReopensExistingDirectMessageWithoutDuplication() {
+        let user = WorkspaceUser(id: "alex", displayName: "Alex", status: "Active", isActive: true)
+        let existingDM = Conversation(
+            id: user.id,
+            title: user.displayName,
+            kind: .directMessage,
+            subtitle: user.status,
+            isFavorite: false,
+            unreadCount: 0,
+            mentionCount: 0,
+            latestActivity: Date(timeIntervalSince1970: 100),
+            messages: []
+        )
+        let store = AppStore(conversations: [existingDM], users: [user])
+
+        store.startDirectMessage(with: user.id)
+
+        #expect(store.destination == .conversation(user.id))
+        #expect(store.conversations.count == 1)
+    }
+
+    @Test
+    func quickSwitcherCreatesDirectMessageForWorkspaceUser() {
+        let user = WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true)
+        let store = AppStore(conversations: [], users: [user])
+        store.quickSwitcherQuery = "maya"
+
+        #expect(store.quickSwitcherUsers == [user])
+
+        store.openFirstQuickSwitcherResult()
+
+        #expect(store.destination == .conversation(user.id))
+        #expect(store.selectedConversation?.kind == .directMessage)
+        #expect(store.selectedConversation?.title == user.displayName)
+    }
+
+    @Test
+    func quickSwitcherArrowSelectionMovesAcrossSectionsAndWraps() {
+        let user = WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true)
+        let channel = conversation(id: "general", unread: 0, activity: 100)
+        let store = AppStore(conversations: [channel], users: [user])
+
+        store.ensureQuickSwitcherSelection()
+        #expect(store.quickSwitcherSelection == .unreads)
+
+        store.moveQuickSwitcherSelection(offset: 1)
+        #expect(store.quickSwitcherSelection == .user(user.id))
+
+        store.moveQuickSwitcherSelection(offset: 1)
+        #expect(store.quickSwitcherSelection == .channel(channel.id))
+
+        store.moveQuickSwitcherSelection(offset: 1)
+        #expect(store.quickSwitcherSelection == .unreads)
+
+        store.moveQuickSwitcherSelection(offset: -1)
+        #expect(store.quickSwitcherSelection == .channel(channel.id))
+    }
+
+    @Test
+    func quickSwitcherQueryResetsSelectionToVisibleResult() {
+        let users = [
+            WorkspaceUser(id: "alex", displayName: "Alex Morgan", status: "Active", isActive: true),
+            WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true),
+        ]
+        let store = AppStore(conversations: [], users: users)
+        store.quickSwitcherSelection = .user("alex")
+        store.quickSwitcherQuery = "maya"
+
+        store.ensureQuickSwitcherSelection()
+
+        #expect(store.quickSwitcherSelection == .user("maya"))
+    }
+
+    @Test
+    func conversationSectionsSplitDirectMessagesAndSortByLatestActivity() {
+        let store = AppStore(conversations: [
+            conversation(id: "older-channel", unread: 0, activity: 100),
+            conversation(id: "newer-channel", unread: 0, activity: 400),
+            conversation(id: "older-dm", kind: .directMessage, unread: 0, activity: 200),
+            conversation(id: "newer-dm", kind: .directMessage, unread: 0, activity: 500),
+            conversation(id: "older-group", kind: .groupDirectMessage, unread: 0, activity: 300),
+            conversation(id: "newer-group", kind: .groupDirectMessage, unread: 0, activity: 600),
+            conversation(id: "older-favorite", favorite: true, unread: 0, activity: 150),
+            conversation(id: "newer-favorite", favorite: true, unread: 0, activity: 550),
+        ])
+
+        #expect(store.channelConversations.map(\.id) == ["newer-channel", "older-channel"])
+        #expect(store.directConversations.map(\.id) == ["newer-dm", "older-dm"])
+        #expect(store.groupDirectConversations.map(\.id) == ["newer-group", "older-group"])
+        #expect(store.favoriteConversations.map(\.id) == ["newer-favorite", "older-favorite"])
+        #expect(
+            store.quickSwitcherChannels.map(\.id)
+                == ["newer-favorite", "newer-channel", "older-favorite", "older-channel"]
+        )
+        #expect(store.quickSwitcherGroupMessages.map(\.id) == ["newer-group", "older-group"])
+    }
+
+    @Test
+    func eachConversationSectionSupportsIndependentSortOptions() {
+        let store = AppStore(conversations: [
+            conversation(id: "Zulu", creation: 100, unread: 0, activity: 300),
+            conversation(id: "Alpha", creation: 300, unread: 0, activity: 100),
+            conversation(id: "Mike", creation: 200, unread: 0, activity: 200),
+        ])
+
+        #expect(store.sortedChannelConversations(by: .name).map(\.id) == ["Alpha", "Mike", "Zulu"])
+        #expect(store.sortedChannelConversations(by: .activity).map(\.id) == ["Zulu", "Mike", "Alpha"])
+        #expect(store.sortedChannelConversations(by: .creation).map(\.id) == ["Alpha", "Mike", "Zulu"])
+    }
+
+    private func conversation(
+        id: String,
+        kind: ConversationKind = .channel,
+        favorite: Bool = false,
+        creation: TimeInterval = 0,
+        unread: Int,
+        mentions: Int = 0,
+        activity: TimeInterval
+    ) -> Conversation {
+        Conversation(
+            id: id,
+            title: id,
+            kind: kind,
+            subtitle: nil,
+            isFavorite: favorite,
+            createdAt: Date(timeIntervalSince1970: creation),
+            unreadCount: unread,
+            mentionCount: mentions,
+            latestActivity: Date(timeIntervalSince1970: activity),
+            messages: []
+        )
+    }
+}
