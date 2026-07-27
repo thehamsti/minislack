@@ -2155,7 +2155,9 @@ final class AppStore {
             displayName: user.displayName,
             profileTitle: user.profileTitle,
             availability: availability,
-            avatarURL: user.avatarURL
+            avatarURL: user.avatarURL,
+            botID: user.botID,
+            appID: user.appID
         )
         usersByID[userID] = updated
         if let index = users.firstIndex(where: { $0.id == userID }) {
@@ -2189,7 +2191,9 @@ final class AppStore {
                     doNotDisturb: current.availability.doNotDisturb,
                     fetchedAt: current.availability.fetchedAt
                 ),
-                avatarURL: profile.avatarURL
+                avatarURL: profile.avatarURL,
+                botID: profile.botID,
+                appID: profile.appID
             )
         }
         usersByID = mergedByID
@@ -2234,7 +2238,9 @@ final class AppStore {
                     doNotDisturb: doNotDisturb,
                     fetchedAt: user.availability.fetchedAt
                 ),
-                avatarURL: user.avatarURL
+                avatarURL: user.avatarURL,
+                botID: user.botID,
+                appID: user.appID
             )
         }
         usersByID = updatedByID

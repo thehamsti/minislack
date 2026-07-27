@@ -251,6 +251,121 @@ struct SlackIntegrationTests {
     }
 
     @Test
+    func botMessagesResolveTheirUserProfileByBotID() throws {
+        let userJSON = """
+        {
+          "id": "U_APP",
+          "real_name": "GitHub",
+          "is_bot": true,
+          "profile": {
+            "display_name": "GitHub",
+            "real_name": "GitHub",
+            "bot_id": "B_GITHUB",
+            "api_app_id": "A_GITHUB",
+            "image_72": "https://avatars.slack-edge.com/github-72.png"
+          }
+        }
+        """
+        let messageJSON = """
+        {
+          "ts": "1700000400.000000",
+          "subtype": "bot_message",
+          "bot_id": "B_GITHUB",
+          "app_id": "A_GITHUB",
+          "text": "Pull request merged"
+        }
+        """
+        let user = try JSONDecoder()
+            .decode(SlackUserDTO.self, from: Data(userJSON.utf8))
+            .workspaceUser
+        let dto = try JSONDecoder().decode(
+            SlackMessageDTO.self,
+            from: Data(messageJSON.utf8)
+        )
+
+        let message = dto.message(
+            users: [user.id: user],
+            currentUserID: "ME"
+        )
+
+        #expect(message.author == "GitHub")
+        #expect(message.authorUserID == "U_APP")
+        #expect(
+            message.authorAvatarURL
+                == URL(string: "https://avatars.slack-edge.com/github-72.png")
+        )
+    }
+
+    @Test
+    func messageHistoryFetchesMissingBotIdentity() async throws {
+        let token = "bot-identity-\(UUID().uuidString)"
+        let client = makeStubbedSlackClient(accessToken: token) { request in
+            let components = try #require(
+                URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            )
+            switch components.path {
+            case "/api/conversations.history":
+                return try slackResponse(
+                    for: request,
+                    json: """
+                    {
+                      "ok": true,
+                      "messages": [{
+                        "ts": "1700000400.000000",
+                        "subtype": "bot_message",
+                        "bot_id": "B_GITHUB",
+                        "app_id": "A_GITHUB",
+                        "text": "Pull request merged"
+                      }]
+                    }
+                    """
+                )
+            case "/api/bots.info":
+                let query = Dictionary(
+                    uniqueKeysWithValues: (components.queryItems ?? []).map {
+                        ($0.name, $0.value ?? "")
+                    }
+                )
+                #expect(query["bot"] == "B_GITHUB")
+                return try slackResponse(
+                    for: request,
+                    json: """
+                    {
+                      "ok": true,
+                      "bot": {
+                        "id": "B_GITHUB",
+                        "app_id": "A_GITHUB",
+                        "name": "GitHub",
+                        "icons": {
+                          "image_72": "https://avatars.slack-edge.com/github-72.png"
+                        }
+                      }
+                    }
+                    """
+                )
+            default:
+                throw SlackStubError.unexpectedRequest
+            }
+        }
+        defer { SlackStubURLProtocol.unregister(accessToken: token) }
+
+        let page = try await client.fetchMessagePage(
+            channelID: "C1",
+            accessToken: token,
+            users: [],
+            currentUserID: "ME"
+        )
+        let message = try #require(page.messages.first)
+
+        #expect(message.author == "GitHub")
+        #expect(message.integration?.name == "GitHub")
+        #expect(
+            message.authorAvatarURL
+                == URL(string: "https://avatars.slack-edge.com/github-72.png")
+        )
+    }
+
+    @Test
     func slackUsersDecodeCustomStatusAndStartWithUnknownPresence() throws {
         let json = """
         [

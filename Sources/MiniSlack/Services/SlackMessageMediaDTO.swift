@@ -311,7 +311,7 @@ struct SlackFileDTO: Decodable {
     }
 }
 
-struct SlackMessageIconsDTO: Decodable {
+struct SlackMessageIconsDTO: Decodable, Sendable {
     let image36: String?
     let image48: String?
     let image72: String?
@@ -327,7 +327,7 @@ struct SlackMessageIconsDTO: Decodable {
     }
 }
 
-struct SlackBotProfileDTO: Decodable {
+struct SlackBotProfileDTO: Decodable, Sendable {
     let id: String?
     let name: String?
     let appID: String?
@@ -338,6 +338,22 @@ struct SlackBotProfileDTO: Decodable {
         case name
         case appID = "app_id"
         case icons
+    }
+
+    var hasCompleteIdentity: Bool {
+        name?.isEmpty == false && icons?.avatarURL != nil
+    }
+
+    func mergingMissingFields(from fallback: SlackBotProfileDTO?) -> SlackBotProfileDTO {
+        guard let fallback else {
+            return self
+        }
+        return SlackBotProfileDTO(
+            id: id ?? fallback.id,
+            name: name?.isEmpty == false ? name : fallback.name,
+            appID: appID ?? fallback.appID,
+            icons: icons?.avatarURL == nil ? fallback.icons : icons
+        )
     }
 }
 

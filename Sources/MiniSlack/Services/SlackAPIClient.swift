@@ -19,6 +19,27 @@ struct SlackConversationReadState: Equatable, Sendable {
     let unreadCount: Int?
 }
 
+actor SlackBotProfileCache {
+    private struct Key: Hashable {
+        let credentialScope: Int
+        let botID: String
+    }
+
+    private var profiles: [Key: SlackBotProfileDTO] = [:]
+
+    func profile(botID: String, credentialScope: Int) -> SlackBotProfileDTO? {
+        profiles[Key(credentialScope: credentialScope, botID: botID)]
+    }
+
+    func store(
+        _ profile: SlackBotProfileDTO,
+        botID: String,
+        credentialScope: Int
+    ) {
+        profiles[Key(credentialScope: credentialScope, botID: botID)] = profile
+    }
+}
+
 struct SlackAPIClient: Sendable {
     enum RequestRetryPolicy: Equatable, Sendable {
         case rateLimitOnly
@@ -59,13 +80,16 @@ struct SlackAPIClient: Sendable {
 
     let urlSession: URLSession
     let requestCoordinator: SlackRequestCoordinator
+    let botProfileCache: SlackBotProfileCache
 
     init(
         urlSession: URLSession = .shared,
-        requestCoordinator: SlackRequestCoordinator = SlackRequestCoordinator()
+        requestCoordinator: SlackRequestCoordinator = SlackRequestCoordinator(),
+        botProfileCache: SlackBotProfileCache = SlackBotProfileCache()
     ) {
         self.urlSession = urlSession
         self.requestCoordinator = requestCoordinator
+        self.botProfileCache = botProfileCache
     }
 
     func fetchWorkspace(
@@ -216,12 +240,18 @@ struct SlackAPIClient: Sendable {
             userNames: userMap.mapValues(\.displayName),
             channelNames: channelNames
         )
+        let botProfiles = await resolveBotProfiles(
+            for: response.messages,
+            accessToken: accessToken,
+            users: userMap
+        )
         let messages = response.messages
             .map {
                 $0.message(
                     users: userMap,
                     currentUserID: currentUserID,
-                    formattingContext: formattingContext
+                    formattingContext: formattingContext,
+                    botProfiles: botProfiles
                 )
             }
             .sorted { $0.timestamp < $1.timestamp }
@@ -436,6 +466,61 @@ struct SlackAPIClient: Sendable {
             }
         } while cursor?.isEmpty == false
         return members
+    }
+
+    func resolveBotProfiles(
+        for messages: [SlackMessageDTO],
+        accessToken: String,
+        users: [String: WorkspaceUser]
+    ) async -> [String: SlackBotProfileDTO] {
+        let botIDs = Set(messages.compactMap { message -> String? in
+            guard let botID = message.botID ?? message.botProfile?.id else {
+                return nil
+            }
+            let botUser = message.resolvedAuthorUser(in: users)
+            let hasInlineIdentity =
+                message.botProfile?.hasCompleteIdentity == true
+                || (
+                    message.username?.isEmpty == false
+                        && message.icons?.avatarURL != nil
+                )
+            guard botUser?.avatarURL == nil && !hasInlineIdentity
+            else {
+                return nil
+            }
+            return botID
+        })
+        let credentialScope = accessToken.hashValue
+        var profiles: [String: SlackBotProfileDTO] = [:]
+        for botID in botIDs.sorted() {
+            if let cached = await botProfileCache.profile(
+                botID: botID,
+                credentialScope: credentialScope
+            ) {
+                profiles[botID] = cached
+                continue
+            }
+            do {
+                let response: SlackBotInfoResponse = try await get(
+                    method: "bots.info",
+                    query: [URLQueryItem(name: "bot", value: botID)],
+                    accessToken: accessToken
+                )
+                try validate(response)
+                guard let profile = response.bot else {
+                    continue
+                }
+                await botProfileCache.store(
+                    profile,
+                    botID: botID,
+                    credentialScope: credentialScope
+                )
+                profiles[botID] = profile
+            } catch {
+                continue
+            }
+        }
+        return profiles
     }
 
     private func fetchConversations(accessToken: String) async throws -> [SlackConversationDTO] {
@@ -694,6 +779,8 @@ struct SlackUserDTO: Decodable {
         let statusExpiration: Int?
         let image72: String?
         let image192: String?
+        let botID: String?
+        let appID: String?
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -708,6 +795,8 @@ struct SlackUserDTO: Decodable {
             )
             image72 = try container.decodeIfPresent(String.self, forKey: .image72)
             image192 = try container.decodeIfPresent(String.self, forKey: .image192)
+            botID = try container.decodeIfPresent(String.self, forKey: .botID)
+            appID = try container.decodeIfPresent(String.self, forKey: .appID)
         }
 
         init() {
@@ -719,6 +808,8 @@ struct SlackUserDTO: Decodable {
             statusExpiration = nil
             image72 = nil
             image192 = nil
+            botID = nil
+            appID = nil
         }
 
         enum CodingKeys: String, CodingKey {
@@ -730,6 +821,8 @@ struct SlackUserDTO: Decodable {
             case statusExpiration = "status_expiration"
             case image72 = "image_72"
             case image192 = "image_192"
+            case botID = "bot_id"
+            case appID = "api_app_id"
         }
 
         var customStatus: UserCustomStatus? {
@@ -790,7 +883,9 @@ struct SlackUserDTO: Decodable {
             avatarURL: [profile.image72, profile.image192]
                 .compactMap { $0 }
                 .first { !$0.isEmpty }
-                .flatMap(URL.init(string:))
+                .flatMap(URL.init(string:)),
+            botID: profile.botID,
+            appID: profile.appID
         )
     }
 }
@@ -1036,6 +1131,12 @@ struct SlackHistoryResponse: Decodable, SlackResponse {
     }
 }
 
+struct SlackBotInfoResponse: Decodable, SlackResponse {
+    let ok: Bool
+    let error: String?
+    let bot: SlackBotProfileDTO?
+}
+
 struct SlackMessageDTO: Decodable {
     struct ReactionDTO: Decodable {
         let name: String
@@ -1140,9 +1241,10 @@ struct SlackMessageDTO: Decodable {
     func message(
         users: [String: WorkspaceUser],
         currentUserID: String,
-        formattingContext: SlackMessageFormatting.Context? = nil
+        formattingContext: SlackMessageFormatting.Context? = nil,
+        botProfiles: [String: SlackBotProfileDTO] = [:]
     ) -> Message {
-        let authorUser = user.flatMap { users[$0] }
+        let authorUser = resolvedAuthorUser(in: users)
         var emojiUnicode: [String: String] = [:]
         for emoji in (blocks ?? []).flatMap(\.emoji) {
             guard let name = emoji.name,
@@ -1166,7 +1268,13 @@ struct SlackMessageDTO: Decodable {
             context: context,
             messageEmoji: emojiUnicode
         )
-        let resolvedIntegration = integration
+        let fetchedBotProfile = (botID ?? botProfile?.id).flatMap {
+            botProfiles[$0]
+        }
+        let resolvedIntegration = integration(
+            botProfile: botProfile?.mergingMissingFields(from: fetchedBotProfile)
+                ?? fetchedBotProfile
+        )
         let isDeleted = subtype == "message_deleted"
             || subtype == "tombstone"
             || deletedTimestamp != nil
@@ -1225,7 +1333,7 @@ struct SlackMessageDTO: Decodable {
         return Message(
             id: clientMessageID.flatMap(UUID.init(uuidString:)) ?? UUID(),
             author: authorUser?.displayName ?? resolvedIntegration?.name ?? username ?? "Slack",
-            authorUserID: user,
+            authorUserID: user ?? authorUser?.id,
             body: text,
             timestamp: Double(timestamp).map(Date.init(timeIntervalSince1970:)) ?? .now,
             authorAvatarURL: authorUser?.avatarURL ?? resolvedIntegration?.avatarURL,
@@ -1270,7 +1378,22 @@ struct SlackMessageDTO: Decodable {
         )
     }
 
-    private var integration: MessageIntegration? {
+    func resolvedAuthorUser(in users: [String: WorkspaceUser]) -> WorkspaceUser? {
+        if let user, let author = users[user] {
+            return author
+        }
+        if let botID,
+           let author = users.values.first(where: { $0.botID == botID })
+        {
+            return author
+        }
+        let resolvedAppID = appID ?? botProfile?.appID
+        return resolvedAppID.flatMap { appID in
+            users.values.first { $0.appID == appID }
+        }
+    }
+
+    private func integration(botProfile: SlackBotProfileDTO?) -> MessageIntegration? {
         let resolvedAppID = appID ?? botProfile?.appID
         guard subtype == "bot_message"
                 || botID != nil

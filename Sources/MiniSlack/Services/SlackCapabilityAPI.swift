@@ -166,11 +166,17 @@ extension SlackAPIClient {
             userNames: userMap.mapValues(\.displayName),
             channelNames: channelNames
         )
+        let botProfiles = await resolveBotProfiles(
+            for: response.messages,
+            accessToken: accessToken,
+            users: userMap
+        )
         let messages = response.messages.map {
             $0.message(
                 users: userMap,
                 currentUserID: currentUserID,
-                formattingContext: context
+                formattingContext: context,
+                botProfiles: botProfiles
             )
         }
         return SlackThreadPage(

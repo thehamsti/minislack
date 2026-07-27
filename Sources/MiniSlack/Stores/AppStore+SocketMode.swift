@@ -124,10 +124,19 @@ extension AppStore {
         else {
             return
         }
+        let userMap = Dictionary(
+            uniqueKeysWithValues: messageUsers.map { ($0.id, $0) }
+        )
+        let botProfiles = await slackAPI?.resolveBotProfiles(
+            for: [dto],
+            accessToken: credentials.accessToken,
+            users: userMap
+        ) ?? [:]
+        guard isCurrentWorkspaceSession(session) else {
+            return
+        }
         let message = dto.message(
-            users: Dictionary(
-                uniqueKeysWithValues: messageUsers.map { ($0.id, $0) }
-            ),
+            users: userMap,
             currentUserID: credentials.userID,
             formattingContext: SlackMessageFormatting.Context(
                 userNames: Dictionary(
@@ -136,7 +145,8 @@ extension AppStore {
                     }
                 ),
                 channelNames: conversationNamesByID
-            )
+            ),
+            botProfiles: botProfiles
         )
 
         if let rootTimestamp = dto.threadTimestamp,
