@@ -4,7 +4,16 @@ import SwiftUI
 @main
 struct MiniSlackApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var store = AppStore.live()
+    @State private var store = Self.makeStore()
+
+    private static func makeStore() -> AppStore {
+        // Renders the full UI with SampleData for design verification,
+        // without touching Slack credentials or the network.
+        if CommandLine.arguments.contains("--sample-data") {
+            return AppStore(connectionState: .preview)
+        }
+        return AppStore.live()
+    }
 
     var body: some Scene {
         Window("Mini Slack", id: "main") {

@@ -681,7 +681,12 @@ struct MessageRow: View {
                 if !message.reactions.isEmpty {
                     HStack(spacing: 5) {
                         ForEach(message.reactions, id: \.self) { reaction in
-                            Button {
+                            MessageReactionChip(
+                                store: store,
+                                reaction: reaction,
+                                customEmojiURLs: customEmojiURLs,
+                                isDisabled: reaction.name.isEmpty || message.remoteID == nil
+                            ) {
                                 perform {
                                     try await store.toggleReaction(
                                         named: reaction.name,
@@ -690,30 +695,7 @@ struct MessageRow: View {
                                         threadIdentifier: threadIdentifier
                                     )
                                 }
-                            } label: {
-                                SlackEmojiText(
-                                    text: "\(reaction.emoji) \(reaction.count)",
-                                    customEmojiURLs: customEmojiURLs
-                                )
-                                .font(.caption)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    reaction.isCurrentUserIncluded
-                                        ? Color.orange.opacity(0.18)
-                                        : Color(nsColor: .quaternaryLabelColor)
-                                            .opacity(0.12),
-                                    in: Capsule()
-                                )
-                                .overlay {
-                                    if reaction.isCurrentUserIncluded {
-                                        Capsule()
-                                            .stroke(.orange.opacity(0.55), lineWidth: 0.5)
-                                    }
-                                }
                             }
-                            .buttonStyle(.plain)
-                            .disabled(reaction.name.isEmpty || message.remoteID == nil)
                         }
                     }
                 }
@@ -1061,6 +1043,172 @@ private struct MessageThreadSummary: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct MessageReactionChip: View {
+    let store: AppStore
+    let reaction: Reaction
+    let customEmojiURLs: [String: URL]
+    let isDisabled: Bool
+    let action: () -> Void
+
+    @State private var isHoveringChip = false
+    @State private var isHoveringPopover = false
+
+    private var isPopoverPresented: Binding<Bool> {
+        Binding(
+            get: { isHoveringChip || isHoveringPopover },
+            set: { presented in
+                if !presented {
+                    isHoveringChip = false
+                    isHoveringPopover = false
+                }
+            }
+        )
+    }
+
+    private var summary: String {
+        reaction.hoverSummary { userID in
+            store.user(withID: userID)?.displayName
+        }
+    }
+
+    var body: some View {
+        // Avoid `.disabled` so hover still presents the reactors list.
+        Button {
+            guard !isDisabled else { return }
+            action()
+        } label: {
+            SlackEmojiText(
+                text: "\(reaction.emoji) \(reaction.count)",
+                customEmojiURLs: customEmojiURLs
+            )
+            .font(.caption)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                reaction.isCurrentUserIncluded
+                    ? Color.orange.opacity(0.18)
+                    : Color(nsColor: .quaternaryLabelColor)
+                        .opacity(0.12),
+                in: Capsule()
+            )
+            .overlay {
+                if reaction.isCurrentUserIncluded {
+                    Capsule()
+                        .stroke(.orange.opacity(0.55), lineWidth: 0.5)
+                }
+            }
+            .opacity(isDisabled ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHoveringChip = hovering
+        }
+        .popover(isPresented: isPopoverPresented, arrowEdge: .bottom) {
+            MessageReactionReactorsPopover(
+                store: store,
+                reaction: reaction,
+                customEmojiURLs: customEmojiURLs
+            )
+            .onHover { hovering in
+                isHoveringPopover = hovering
+            }
+        }
+        .help(summary)
+        .accessibilityLabel(summary)
+        .accessibilityHint(isDisabled ? "" : "Toggle this reaction")
+    }
+}
+
+private struct MessageReactionReactorsPopover: View {
+    let store: AppStore
+    let reaction: Reaction
+    let customEmojiURLs: [String: URL]
+
+    private var reactors: [(id: String, user: WorkspaceUser?)] {
+        if reaction.userIDs.isEmpty {
+            return []
+        }
+        return reaction.userIDs.map { userID in
+            (id: userID, user: store.user(withID: userID))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                SlackEmojiText(
+                    text: reaction.emoji,
+                    customEmojiURLs: customEmojiURLs
+                )
+                .font(.title3)
+                Text(headerText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            if reactors.isEmpty {
+                Text(emptyStateText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(reactors, id: \.id) { reactor in
+                            HStack(spacing: 8) {
+                                UserAvatar(
+                                    imageURL: reactor.user?.avatarURL,
+                                    initials: reactor.user?.initials ?? "?",
+                                    accessibilityName: displayName(for: reactor),
+                                    size: 22,
+                                    availability: reactor.user?.availability
+                                )
+                                Text(displayName(for: reactor))
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: scrollMaxHeight)
+            }
+        }
+        .padding(10)
+        .frame(minWidth: 160, idealWidth: 200, maxWidth: 260, alignment: .leading)
+    }
+
+    private var headerText: String {
+        if reaction.count == 1 {
+            return "reacted"
+        }
+        return "\(reaction.count) reactions"
+    }
+
+    private var emptyStateText: String {
+        if reaction.count <= 1 {
+            return "1 person reacted"
+        }
+        return "\(reaction.count) people reacted"
+    }
+
+    private var scrollMaxHeight: CGFloat {
+        // Roughly 6 rows before scrolling.
+        min(CGFloat(reactors.count) * 28, 168)
+    }
+
+    private func displayName(
+        for reactor: (id: String, user: WorkspaceUser?)
+    ) -> String {
+        let resolved = reactor.user?.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let resolved, !resolved.isEmpty {
+            return resolved
+        }
+        return reactor.id
     }
 }
 

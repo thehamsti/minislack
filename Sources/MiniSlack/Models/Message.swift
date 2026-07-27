@@ -277,4 +277,40 @@ struct Reaction: Codable, Hashable, Sendable {
             forKey: .isCurrentUserIncluded
         ) ?? false
     }
+
+    /// Display names for known reactors, preserving reaction order.
+    /// Falls back to the raw user ID when a name cannot be resolved.
+    func reactorDisplayNames(resolveName: (String) -> String?) -> [String] {
+        userIDs.map { userID in
+            let resolved = resolveName(userID)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let resolved, !resolved.isEmpty {
+                return resolved
+            }
+            return userID
+        }
+    }
+
+    /// Compact hover/accessibility summary, e.g. "Ada and Linus reacted with 👍".
+    func hoverSummary(resolveName: (String) -> String?) -> String {
+        let names = reactorDisplayNames(resolveName: resolveName)
+        if names.isEmpty {
+            if count <= 1 {
+                return "1 person reacted with \(emoji)"
+            }
+            return "\(count) people reacted with \(emoji)"
+        }
+
+        let joined: String
+        switch names.count {
+        case 1:
+            joined = names[0]
+        case 2:
+            joined = "\(names[0]) and \(names[1])"
+        default:
+            let leading = names.dropLast().joined(separator: ", ")
+            joined = "\(leading), and \(names[names.count - 1])"
+        }
+        return "\(joined) reacted with \(emoji)"
+    }
 }

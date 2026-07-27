@@ -89,6 +89,8 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
                 .previous
             case "l":
                 .open
+            case "r":
+                .markRead
             default:
                 nil
             }

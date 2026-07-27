@@ -117,6 +117,117 @@ struct AppStoreTests {
     }
 
     @Test
+    func markingReadFromInboxAdvancesKeyboardSelectionToNextCard() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+            conversation(id: "three", unread: 1, activity: 100),
+        ])
+        store.keyboardConversationID = "two"
+
+        store.markConversationRead("two")
+
+        #expect(store.unreadConversations.map(\.id) == ["one", "three"])
+        #expect(store.keyboardConversationID == "three")
+        #expect(store.destination == .unreadInbox)
+    }
+
+    @Test
+    func markingLastInboxCardMovesSelectionToNewLastCard() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+        ])
+        store.keyboardConversationID = "two"
+
+        store.markConversationRead("two")
+
+        #expect(store.keyboardConversationID == "one")
+    }
+
+    @Test
+    func markingReadFromInboxIsNoOpForReadConversations() {
+        let store = AppStore(conversations: [
+            conversation(id: "read", unread: 0, activity: 100)
+        ])
+
+        store.markConversationRead("read")
+
+        #expect(store.unreadConversations.isEmpty)
+        #expect(store.conversations.first?.unreadCount == 0)
+    }
+
+    @Test
+    func markingVisibleUnreadsReadClearsTheFilteredInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "mention", unread: 1, mentions: 1, activity: 300),
+            conversation(id: "plain", unread: 2, activity: 200),
+        ])
+        store.unreadFilters.mentionsOnly = true
+
+        store.markVisibleUnreadsRead()
+
+        #expect(store.conversations.first { $0.id == "mention" }?.unreadCount == 0)
+        #expect(store.conversations.first { $0.id == "plain" }?.unreadCount == 2)
+    }
+
+    @Test
+    func markingAllUnreadsReadEmptiesTheInbox() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 3, activity: 200),
+        ])
+
+        store.markVisibleUnreadsRead()
+
+        #expect(store.unreadConversations.isEmpty)
+        #expect(store.keyboardConversationID == nil)
+    }
+
+    @Test
+    func keyboardNavigationStaysWithinFilteredUnreads() {
+        let store = AppStore(conversations: [
+            conversation(id: "chan-one", unread: 1, activity: 300),
+            conversation(id: "dm-one", kind: .directMessage, unread: 1, activity: 250),
+            conversation(id: "dm-two", kind: .directMessage, unread: 1, activity: 200),
+        ])
+        store.unreadFilters.kind = .directMessages
+
+        #expect(store.keyboardConversationID == "dm-one")
+
+        store.handleKeyboardNavigation(.next)
+        #expect(store.keyboardConversationID == "dm-two")
+
+        store.handleKeyboardNavigation(.next)
+        #expect(store.keyboardConversationID == "dm-one")
+    }
+
+    @Test
+    func markReadKeyboardActionMarksHighlightedInboxCard() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300),
+            conversation(id: "two", unread: 1, activity: 200),
+        ])
+
+        store.handleKeyboardNavigation(.markRead)
+
+        #expect(store.unreadConversations.map(\.id) == ["two"])
+        #expect(store.keyboardConversationID == "two")
+    }
+
+    @Test
+    func markReadKeyboardActionIsInertInsideAConversation() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 1, activity: 300)
+        ])
+        store.select("one")
+
+        store.handleKeyboardNavigation(.markRead)
+
+        #expect(store.conversations.first?.unreadCount == 1)
+    }
+
+    @Test
     func quickSwitcherCombinesDirectMessagesGroupsAndChannelsByLatestActivity() {
         let alex = WorkspaceUser(id: "alex", displayName: "Alex Morgan", status: "Active", isActive: true)
         let maya = WorkspaceUser(id: "maya", displayName: "Maya Chen", status: "Product", isActive: true)

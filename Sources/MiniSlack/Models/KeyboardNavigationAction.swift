@@ -3,4 +3,5 @@ enum KeyboardNavigationAction: Sendable {
     case previous
     case open
     case back
+    case markRead
 }

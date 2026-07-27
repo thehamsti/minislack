@@ -166,6 +166,11 @@ final class AppStore {
     var quickSwitcherQuery = ""
     var quickSwitcherSelection: QuickSwitcherItem?
     var keyboardConversationID: String?
+    var unreadFilters = UnreadInboxFilters() {
+        didSet {
+            ensureKeyboardSelection()
+        }
+    }
     private(set) var publicChannels: [SlackPublicChannel] = []
     private(set) var historyStates: [String: ConversationHistoryState] = [:]
     var threadStates: [ThreadIdentifier: ThreadState] = [:]
@@ -342,6 +347,50 @@ final class AppStore {
                 }
                 return $0.latestActivity > $1.latestActivity
             }
+    }
+
+    var filteredUnreadConversations: [Conversation] {
+        unreadFilters.apply(to: unreadConversations) { conversation in
+            unreadMessages(for: conversation)
+        }
+    }
+
+    var unreadAuthors: [UnreadAuthor] {
+        var authorsByID: [String: UnreadAuthor] = [:]
+        for conversation in unreadConversations {
+            for message in unreadMessages(for: conversation) {
+                let key = message.unreadAuthorFilterKey
+                guard authorsByID[key] == nil else {
+                    continue
+                }
+                let user = message.authorUserID.flatMap { usersByID[$0] }
+                authorsByID[key] = UnreadAuthor(
+                    id: key,
+                    displayName: user?.displayName ?? message.author,
+                    avatarURL: user?.avatarURL ?? message.authorAvatarURL
+                )
+            }
+        }
+        return authorsByID.values.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
+                == .orderedAscending
+        }
+    }
+
+    /// Messages a conversation's unread state covers, sliced at the Slack read
+    /// cursor when one is known and falling back to the tail of the loaded
+    /// history otherwise. Bounded by both the unread count and loaded history.
+    func unreadMessages(for conversation: Conversation) -> [Message] {
+        guard conversation.unreadCount > 0 else {
+            return []
+        }
+        if let cursorDate = readCursorsByConversationID[conversation.id]?.timestamp {
+            let unread = conversation.messages.filter { $0.timestamp > cursorDate }
+            if !unread.isEmpty {
+                return unread
+            }
+        }
+        return Array(conversation.messages.suffix(conversation.unreadCount))
     }
 
     var selectedConversation: Conversation? {
@@ -921,6 +970,8 @@ final class AppStore {
             openKeyboardSelection()
         case .back:
             showUnreadInbox()
+        case .markRead:
+            markKeyboardSelectionRead()
         }
     }
 
@@ -989,24 +1040,102 @@ final class AppStore {
     }
 
     func markSelectedConversationRead() {
-        guard case let .conversation(id) = destination,
-              let index = conversations.firstIndex(where: { $0.id == id })
+        guard case let .conversation(id) = destination else {
+            return
+        }
+        markConversationRead(id)
+    }
+
+    func markKeyboardSelectionRead() {
+        guard case .unreadInbox = destination,
+              let keyboardConversationID
         else {
             return
         }
+        markConversationRead(keyboardConversationID)
+    }
+
+    func markConversationRead(_ conversationID: String) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }),
+              conversations[index].isUnread
+        else {
+            return
+        }
+        let visibleIDs = filteredUnreadConversations.map(\.id)
+        let removalIndex = visibleIDs.firstIndex(of: conversationID)
         let timestamp = conversations[index].messages.last?.remoteID
+            ?? Self.slackTimestamp(for: conversations[index].latestActivity)
         conversations[index].unreadCount = 0
         conversations[index].mentionCount = 0
         refreshDockBadge()
+        scheduleWorkspaceStatePersist()
+
+        if case .unreadInbox = destination, let removalIndex {
+            let remainingIDs = filteredUnreadConversations.map(\.id)
+            keyboardConversationID = remainingIDs.isEmpty
+                ? nil
+                : remainingIDs[min(removalIndex, remainingIDs.count - 1)]
+        }
+
         if let timestamp, slackAPI != nil {
             startWorkspaceOperation { [weak self] session in
                 await self?.markLiveConversationRead(
-                    channelID: id,
+                    channelID: conversationID,
                     timestamp: timestamp,
                     session: session
                 )
             }
         }
+    }
+
+    func markConversationsRead(_ conversationIDs: [String]) {
+        let unreadIDs = conversationIDs.filter { id in
+            conversations.first { $0.id == id }?.isUnread == true
+        }
+        guard !unreadIDs.isEmpty else {
+            return
+        }
+        var liveMarks: [(channelID: String, timestamp: String)] = []
+        for id in unreadIDs {
+            guard let index = conversations.firstIndex(where: { $0.id == id }) else {
+                continue
+            }
+            conversations[index].unreadCount = 0
+            conversations[index].mentionCount = 0
+            if let timestamp = conversations[index].messages.last?.remoteID
+                ?? Self.slackTimestamp(for: conversations[index].latestActivity)
+            {
+                liveMarks.append((channelID: id, timestamp: timestamp))
+            }
+        }
+        refreshDockBadge()
+        scheduleWorkspaceStatePersist()
+        ensureKeyboardSelection()
+        guard slackAPI != nil, !liveMarks.isEmpty else {
+            return
+        }
+        startWorkspaceOperation { [weak self] session in
+            for mark in liveMarks {
+                await self?.markLiveConversationRead(
+                    channelID: mark.channelID,
+                    timestamp: mark.timestamp,
+                    session: session
+                )
+            }
+        }
+    }
+
+    func markVisibleUnreadsRead() {
+        markConversationsRead(filteredUnreadConversations.map(\.id))
+    }
+
+    /// conversations.mark accepts any timestamp, so conversations without a
+    /// loaded message can still be marked up to the latest activity we saw.
+    private static func slackTimestamp(for date: Date) -> String? {
+        guard date > .distantPast else {
+            return nil
+        }
+        return String(format: "%.6f", date.timeIntervalSince1970)
     }
 
     func sendDraft() {
@@ -1216,6 +1345,7 @@ final class AppStore {
         incrementalSyncCatchups = [:]
         readCursorsByConversationID = [:]
         unreadBaselinedConversationIDs = []
+        unreadFilters = UnreadInboxFilters()
         lastPolledAtByConversationID = [:]
         workspaceSnapshotStore = nil
         cancelOutgoingMessageReplay()
@@ -2021,7 +2151,7 @@ final class AppStore {
     private var keyboardNavigationIDs: [String] {
         switch destination {
         case .unreadInbox:
-            return unreadConversations.map(\.id)
+            return filteredUnreadConversations.map(\.id)
         case .activity, .savedMessages:
             return []
         case .conversation:
