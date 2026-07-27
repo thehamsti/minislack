@@ -42,6 +42,8 @@ actor SlackOAuthService {
         "channels:read",
         "channels:write",
         "chat:write",
+        "dnd:read",
+        "emoji:read",
         "groups:history",
         "groups:read",
         "groups:write",

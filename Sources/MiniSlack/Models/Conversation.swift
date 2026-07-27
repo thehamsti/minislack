@@ -8,7 +8,7 @@ enum ConversationKind: String, Sendable {
 
 struct Conversation: Identifiable, Hashable, Sendable {
     let id: String
-    let title: String
+    var title: String
     let kind: ConversationKind
     let subtitle: String?
     let isFavorite: Bool

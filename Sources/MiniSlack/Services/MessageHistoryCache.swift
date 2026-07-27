@@ -27,7 +27,9 @@ actor MessageHistoryCache {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         )[0].appending(path: "MiniSlack/History", directoryHint: .isDirectory)
-        self.rootURL = baseURL.appending(path: workspaceID, directoryHint: .isDirectory)
+        self.rootURL = baseURL
+            .appending(path: workspaceID, directoryHint: .isDirectory)
+            .appending(path: "v2", directoryHint: .isDirectory)
     }
 
     func page(channelID: String, index: Int) throws -> MessageHistoryPage? {

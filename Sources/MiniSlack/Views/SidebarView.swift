@@ -32,7 +32,11 @@ struct SidebarView: View {
             if !store.unreadConversations.isEmpty {
                 Section {
                     ForEach(store.sortedUnreadConversations(by: unreadSort)) { conversation in
-                        ConversationSidebarRow(conversation: conversation, highlightsUnread: true)
+                        ConversationSidebarRow(
+                            store: store,
+                            conversation: conversation,
+                            highlightsUnread: true
+                        )
                             .tag(AppStore.Destination.conversation(conversation.id))
                     }
                 } header: {
@@ -42,7 +46,7 @@ struct SidebarView: View {
 
             Section {
                 ForEach(store.sortedFavoriteConversations(by: favoritesSort)) { conversation in
-                    ConversationSidebarRow(conversation: conversation)
+                    ConversationSidebarRow(store: store, conversation: conversation)
                         .tag(AppStore.Destination.conversation(conversation.id))
                 }
             } header: {
@@ -51,7 +55,7 @@ struct SidebarView: View {
 
             Section {
                 ForEach(store.sortedChannelConversations(by: channelsSort)) { conversation in
-                    ConversationSidebarRow(conversation: conversation)
+                    ConversationSidebarRow(store: store, conversation: conversation)
                         .tag(AppStore.Destination.conversation(conversation.id))
                 }
             } header: {
@@ -60,7 +64,7 @@ struct SidebarView: View {
 
             Section {
                 ForEach(store.sortedDirectConversations(by: directMessagesSort)) { conversation in
-                    ConversationSidebarRow(conversation: conversation)
+                    ConversationSidebarRow(store: store, conversation: conversation)
                         .tag(AppStore.Destination.conversation(conversation.id))
                 }
             } header: {
@@ -69,7 +73,7 @@ struct SidebarView: View {
 
             Section {
                 ForEach(store.sortedGroupDirectConversations(by: groupMessagesSort)) { conversation in
-                    ConversationSidebarRow(conversation: conversation)
+                    ConversationSidebarRow(store: store, conversation: conversation)
                         .tag(AppStore.Destination.conversation(conversation.id))
                 }
             } header: {
@@ -121,13 +125,14 @@ private struct SortableSectionHeader: View {
 }
 
 private struct ConversationSidebarRow: View {
+    let store: AppStore
     let conversation: Conversation
     var highlightsUnread = false
 
     var body: some View {
         HStack(spacing: 8) {
             if conversation.isDirectMessage {
-                ConversationAvatar(conversation: conversation, size: 18)
+                ConversationAvatar(store: store, conversation: conversation, size: 18)
             } else {
                 Image(systemName: conversation.systemImage)
                     .font(.system(size: 12, weight: highlightsUnread ? .semibold : .regular))

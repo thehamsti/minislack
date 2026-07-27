@@ -2,7 +2,9 @@ import Foundation
 
 struct SlackWorkspaceSnapshot: Sendable {
     let users: [WorkspaceUser]
+    let messageUsers: [WorkspaceUser]
     let conversations: [Conversation]
+    let customEmojiURLs: [String: URL]
 }
 
 struct SlackConversationMetadata: Sendable {
@@ -49,7 +51,9 @@ struct SlackAPIClient: Sendable {
     ) async throws -> SlackWorkspaceSnapshot {
         async let users = fetchUsers(accessToken: accessToken)
         async let conversations = fetchConversations(accessToken: accessToken)
+        async let customEmoji = fetchCustomEmoji(accessToken: accessToken)
         let (userDTOs, conversationDTOs) = try await (users, conversations)
+        let customEmojiURLs = (try? await customEmoji) ?? [:]
         let hydratedConversations = await hydrateGroupMembers(
             in: conversationDTOs,
             accessToken: accessToken
@@ -57,20 +61,77 @@ struct SlackAPIClient: Sendable {
         return Self.makeSnapshot(
             users: userDTOs,
             conversations: hydratedConversations,
-            currentUserID: currentUserID
+            currentUserID: currentUserID,
+            customEmojiURLs: customEmojiURLs
         )
+    }
+
+    func fetchWorkspaceUsers(accessToken: String) async throws -> [WorkspaceUser] {
+        try await fetchUsers(accessToken: accessToken).map(\.workspaceUser)
+    }
+
+    func fetchPresence(
+        userID: String,
+        currentUserID: String,
+        accessToken: String
+    ) async throws -> UserPresence {
+        let response: SlackPresenceResponse = try await get(
+            method: "users.getPresence",
+            query: [URLQueryItem(name: "user", value: userID)],
+            accessToken: accessToken
+        )
+        try validate(response)
+        return response.userPresence(isCurrentUser: userID == currentUserID)
+    }
+
+    func fetchDoNotDisturb(
+        userIDs: [String],
+        accessToken: String
+    ) async throws -> [String: UserDoNotDisturb] {
+        var seen = Set<String>()
+        let uniqueUserIDs = userIDs.filter { !$0.isEmpty && seen.insert($0).inserted }
+        var statuses: [String: UserDoNotDisturb] = [:]
+
+        for start in stride(from: 0, to: uniqueUserIDs.count, by: 50) {
+            let end = min(start + 50, uniqueUserIDs.count)
+            let chunk = Array(uniqueUserIDs[start ..< end])
+            if chunk.count == 1, let userID = chunk.first {
+                let response: SlackDoNotDisturbInfoResponse = try await get(
+                    method: "dnd.info",
+                    query: [URLQueryItem(name: "user", value: userID)],
+                    accessToken: accessToken
+                )
+                try validate(response)
+                statuses[userID] = response.doNotDisturb
+                continue
+            }
+
+            let response: SlackDoNotDisturbTeamResponse = try await get(
+                method: "dnd.teamInfo",
+                query: [URLQueryItem(name: "users", value: chunk.joined(separator: ","))],
+                accessToken: accessToken
+            )
+            try validate(response)
+            for (userID, status) in response.users {
+                statuses[userID] = status.doNotDisturb
+            }
+        }
+
+        return statuses
     }
 
     func fetchMessages(
         channelID: String,
         accessToken: String,
         users: [WorkspaceUser],
+        channelNames: [String: String] = [:],
         currentUserID: String
     ) async throws -> [Message] {
         try await fetchMessagePage(
             channelID: channelID,
             accessToken: accessToken,
             users: users,
+            channelNames: channelNames,
             currentUserID: currentUserID
         ).messages
     }
@@ -81,6 +142,7 @@ struct SlackAPIClient: Sendable {
         limit: Int = 50,
         accessToken: String,
         users: [WorkspaceUser],
+        channelNames: [String: String] = [:],
         currentUserID: String
     ) async throws -> SlackMessagePage {
         var query = [
@@ -97,8 +159,18 @@ struct SlackAPIClient: Sendable {
         )
         try validate(response)
         let userMap = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        let formattingContext = SlackMessageFormatting.Context(
+            userNames: userMap.mapValues(\.displayName),
+            channelNames: channelNames
+        )
         let messages = response.messages
-            .map { $0.message(users: userMap, currentUserID: currentUserID) }
+            .map {
+                $0.message(
+                    users: userMap,
+                    currentUserID: currentUserID,
+                    formattingContext: formattingContext
+                )
+            }
             .sorted { $0.timestamp < $1.timestamp }
         let nextCursor = response.responseMetadata?.nextCursor
             .flatMap { $0.isEmpty ? nil : $0 }
@@ -171,18 +243,29 @@ struct SlackAPIClient: Sendable {
     static func makeSnapshot(
         users userDTOs: [SlackUserDTO],
         conversations conversationDTOs: [SlackConversationDTO],
-        currentUserID: String = ""
+        currentUserID: String = "",
+        customEmojiURLs: [String: URL] = [:]
     ) -> SlackWorkspaceSnapshot {
         let visibleUsers = userDTOs
             .filter { !$0.deleted && !$0.isBot }
             .map(\.workspaceUser)
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         let userMap = Dictionary(uniqueKeysWithValues: visibleUsers.map { ($0.id, $0) })
+        let messageUsers = userDTOs.map(\.workspaceUser)
+        let messageUserMap = Dictionary(uniqueKeysWithValues: messageUsers.map { ($0.id, $0) })
         let groupMemberMap = Dictionary(
             uniqueKeysWithValues: userDTOs
                 .filter { !$0.isBot }
                 .map(\.workspaceUser)
                 .map { ($0.id, $0) }
+        )
+        let formattingContext = SlackMessageFormatting.Context(
+            userNames: messageUserMap.mapValues(\.displayName),
+            channelNames: Dictionary(
+                uniqueKeysWithValues: conversationDTOs.compactMap { dto in
+                    dto.name.map { (dto.id, $0) }
+                }
+            )
         )
 
         let conversations = conversationDTOs.compactMap { dto -> Conversation? in
@@ -209,8 +292,9 @@ struct SlackAPIClient: Sendable {
 
             let latestMessage = dto.latest.map {
                 $0.message(
-                    users: userMap,
-                    currentUserID: currentUserID
+                    users: messageUserMap,
+                    currentUserID: currentUserID,
+                    formattingContext: formattingContext
                 )
             }
             let createdAt = dto.created
@@ -250,7 +334,12 @@ struct SlackAPIClient: Sendable {
         }
         .sorted { $0.latestActivity > $1.latestActivity }
 
-        return SlackWorkspaceSnapshot(users: visibleUsers, conversations: conversations)
+        return SlackWorkspaceSnapshot(
+            users: visibleUsers,
+            messageUsers: messageUsers,
+            conversations: conversations,
+            customEmojiURLs: customEmojiURLs
+        )
     }
 
     private func fetchUsers(accessToken: String) async throws -> [SlackUserDTO] {
@@ -357,6 +446,16 @@ struct SlackAPIClient: Sendable {
         return members
     }
 
+    private func fetchCustomEmoji(accessToken: String) async throws -> [String: URL] {
+        let response: SlackEmojiResponse = try await get(
+            method: "emoji.list",
+            query: [],
+            accessToken: accessToken
+        )
+        try validate(response)
+        return SlackEmoji.resolveCustomEmoji(response.emoji)
+    }
+
     private func get<T: Decodable>(
         method: String,
         query: [URLQueryItem],
@@ -425,6 +524,25 @@ struct SlackBaseResponse: Decodable, SlackResponse {
     let error: String?
 }
 
+struct SlackEmojiResponse: Decodable, SlackResponse {
+    let ok: Bool
+    let error: String?
+    let emoji: [String: String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        emoji = try container.decodeIfPresent([String: String].self, forKey: .emoji) ?? [:]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+        case emoji
+    }
+}
+
 struct SlackUsersResponse: Decodable, SlackResponse {
     let ok: Bool
     let error: String?
@@ -443,16 +561,62 @@ struct SlackUserDTO: Decodable {
     struct Profile: Decodable {
         let displayName: String
         let realName: String
+        let title: String?
         let statusText: String
+        let statusEmoji: String?
+        let statusExpiration: Int?
         let image72: String?
         let image192: String?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+            realName = try container.decodeIfPresent(String.self, forKey: .realName) ?? ""
+            title = try container.decodeIfPresent(String.self, forKey: .title)
+            statusText = try container.decodeIfPresent(String.self, forKey: .statusText) ?? ""
+            statusEmoji = try container.decodeIfPresent(String.self, forKey: .statusEmoji)
+            statusExpiration = try container.decodeIfPresent(
+                Int.self,
+                forKey: .statusExpiration
+            )
+            image72 = try container.decodeIfPresent(String.self, forKey: .image72)
+            image192 = try container.decodeIfPresent(String.self, forKey: .image192)
+        }
+
+        init() {
+            displayName = ""
+            realName = ""
+            title = nil
+            statusText = ""
+            statusEmoji = nil
+            statusExpiration = nil
+            image72 = nil
+            image192 = nil
+        }
 
         enum CodingKeys: String, CodingKey {
             case displayName = "display_name"
             case realName = "real_name"
+            case title
             case statusText = "status_text"
+            case statusEmoji = "status_emoji"
+            case statusExpiration = "status_expiration"
             case image72 = "image_72"
             case image192 = "image_192"
+        }
+
+        var customStatus: UserCustomStatus? {
+            let emoji = statusEmoji.flatMap { $0.isEmpty ? nil : $0 }
+            guard !statusText.isEmpty || emoji != nil else {
+                return nil
+            }
+            let expiresAt = statusExpiration
+                .flatMap { $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil }
+            return UserCustomStatus(
+                text: statusText,
+                emoji: emoji,
+                expiresAt: expiresAt
+            )
         }
     }
 
@@ -460,7 +624,6 @@ struct SlackUserDTO: Decodable {
     let realName: String?
     let deleted: Bool
     let isBot: Bool
-    let presence: String?
     let profile: Profile
 
     enum CodingKeys: String, CodingKey {
@@ -468,8 +631,16 @@ struct SlackUserDTO: Decodable {
         case realName = "real_name"
         case deleted
         case isBot = "is_bot"
-        case presence
         case profile
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        realName = try container.decodeIfPresent(String.self, forKey: .realName)
+        deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
+        isBot = try container.decodeIfPresent(Bool.self, forKey: .isBot) ?? false
+        profile = try container.decodeIfPresent(Profile.self, forKey: .profile) ?? Profile()
     }
 
     var workspaceUser: WorkspaceUser {
@@ -479,13 +650,123 @@ struct SlackUserDTO: Decodable {
         return WorkspaceUser(
             id: id,
             displayName: displayName,
-            status: profile.statusText.isEmpty ? "Slack member" : profile.statusText,
-            isActive: presence == "active",
+            profileTitle: profile.title.flatMap { $0.isEmpty ? nil : $0 },
+            availability: UserAvailability(
+                presence: deleted || isBot ? .notApplicable : .unknown,
+                customStatus: profile.customStatus,
+                doNotDisturb: nil,
+                fetchedAt: nil
+            ),
             avatarURL: [profile.image72, profile.image192]
                 .compactMap { $0 }
                 .first { !$0.isEmpty }
                 .flatMap(URL.init(string:))
         )
+    }
+}
+
+struct SlackPresenceResponse: Decodable, SlackResponse {
+    let ok: Bool
+    let error: String?
+    let presence: String?
+    let online: Bool?
+
+    func userPresence(isCurrentUser: Bool) -> UserPresence {
+        if isCurrentUser, online == false {
+            return .offline
+        }
+        switch presence {
+        case "active":
+            return .active
+        case "away":
+            return .away
+        default:
+            return .unknown
+        }
+    }
+}
+
+struct SlackDoNotDisturbStatus: Decodable {
+    let isEnabled: Bool
+    let nextEndTimestamp: Int?
+    let isSnoozed: Bool
+    let snoozeEndTimestamp: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled = "dnd_enabled"
+        case nextEndTimestamp = "next_dnd_end_ts"
+        case isSnoozed = "snooze_enabled"
+        case snoozeEndTimestamp = "snooze_endtime"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        nextEndTimestamp = try container.decodeIfPresent(Int.self, forKey: .nextEndTimestamp)
+        isSnoozed = try container.decodeIfPresent(Bool.self, forKey: .isSnoozed) ?? false
+        snoozeEndTimestamp = try container.decodeIfPresent(
+            Int.self,
+            forKey: .snoozeEndTimestamp
+        )
+    }
+
+    var doNotDisturb: UserDoNotDisturb {
+        let active = isEnabled || isSnoozed
+        let endTimestamp = isSnoozed
+            ? snoozeEndTimestamp ?? nextEndTimestamp
+            : nextEndTimestamp
+        return UserDoNotDisturb(
+            isEnabled: active,
+            endsAt: active
+                ? endTimestamp.flatMap {
+                    $0 > 1 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil
+                }
+                : nil
+        )
+    }
+}
+
+struct SlackDoNotDisturbTeamResponse: Decodable, SlackResponse {
+    let ok: Bool
+    let error: String?
+    let users: [String: SlackDoNotDisturbStatus]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        users = try container.decodeIfPresent(
+            [String: SlackDoNotDisturbStatus].self,
+            forKey: .users
+        ) ?? [:]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+        case users
+    }
+}
+
+struct SlackDoNotDisturbInfoResponse: Decodable, SlackResponse {
+    let ok: Bool
+    let error: String?
+    let status: SlackDoNotDisturbStatus
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        status = try SlackDoNotDisturbStatus(from: decoder)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+    }
+
+    var doNotDisturb: UserDoNotDisturb {
+        status.doNotDisturb
     }
 }
 
@@ -605,6 +886,7 @@ struct SlackMessageDTO: Decodable {
     let username: String?
     let text: String
     let reactions: [ReactionDTO]?
+    let blocks: [SlackRichTextNode]?
 
     enum CodingKeys: String, CodingKey {
         case timestamp = "ts"
@@ -612,19 +894,77 @@ struct SlackMessageDTO: Decodable {
         case username
         case text
         case reactions
+        case blocks
     }
 
-    func message(users: [String: WorkspaceUser], currentUserID: String) -> Message {
+    func message(
+        users: [String: WorkspaceUser],
+        currentUserID: String,
+        formattingContext: SlackMessageFormatting.Context? = nil
+    ) -> Message {
         let authorUser = user.flatMap { users[$0] }
+        var emojiUnicode: [String: String] = [:]
+        for emoji in (blocks ?? []).flatMap(\.emoji) {
+            guard let name = emoji.name,
+                  let unicode = emoji.unicode,
+                  let value = SlackEmoji.string(
+                      fromSlackUnicode: unicode,
+                      skinTone: emoji.skinTone
+                  )
+            else {
+                continue
+            }
+            emojiUnicode[name] = value
+        }
+        let context = formattingContext ?? SlackMessageFormatting.Context(
+            userNames: users.mapValues(\.displayName),
+            channelNames: [:]
+        )
+        let formattedBody = SlackMessageFormatting.render(in: text, context: context)
         return Message(
             author: authorUser?.displayName ?? username ?? "Slack",
+            authorUserID: user,
             body: text,
             timestamp: Double(timestamp).map(Date.init(timeIntervalSince1970:)) ?? .now,
             authorAvatarURL: authorUser?.avatarURL,
             remoteID: timestamp,
             isCurrentUser: user == currentUserID,
-            reactions: reactions?.map { Reaction(emoji: ":\($0.name):", count: $0.count) } ?? []
+            displayBody: SlackEmoji.replacingUnicodeShortcodes(
+                in: formattedBody,
+                messageEmoji: emojiUnicode
+            ),
+            reactions: reactions?.map {
+                Reaction(
+                    emoji: SlackEmoji.replacingUnicodeShortcodes(
+                        in: ":\($0.name):",
+                        messageEmoji: emojiUnicode
+                    ),
+                    count: $0.count
+                )
+            } ?? [],
+            emojiUnicode: emojiUnicode
         )
+    }
+}
+
+struct SlackRichTextNode: Decodable {
+    let type: String?
+    let name: String?
+    let unicode: String?
+    let skinTone: Int?
+    let elements: [SlackRichTextNode]?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case name
+        case unicode
+        case skinTone = "skin_tone"
+        case elements
+    }
+
+    var emoji: [SlackRichTextNode] {
+        let nested = (elements ?? []).flatMap(\.emoji)
+        return type == "emoji" ? [self] + nested : nested
     }
 }
 

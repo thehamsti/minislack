@@ -86,6 +86,24 @@ struct AppStoreTests {
     }
 
     @Test
+    func draftsStayWithTheirConversation() {
+        let store = AppStore(conversations: [
+            conversation(id: "one", unread: 0, activity: 200),
+            conversation(id: "two", unread: 0, activity: 100),
+        ])
+
+        store.select("one")
+        store.draft = "First draft"
+        store.select("two")
+        store.draft = "Second draft"
+
+        store.select("one")
+        #expect(store.draft == "First draft")
+        store.select("two")
+        #expect(store.draft == "Second draft")
+    }
+
+    @Test
     func markingReadRemovesConversationFromUnreadInbox() {
         let store = AppStore(conversations: [
             conversation(id: "channel", unread: 4, mentions: 2, activity: 100)
@@ -197,6 +215,35 @@ struct AppStoreTests {
         store.ensureQuickSwitcherSelection()
 
         #expect(store.quickSwitcherSelection == .user("maya"))
+    }
+
+    @Test
+    func availabilityUpdatesFlowThroughTheAuthoritativeUserResolver() {
+        let user = WorkspaceUser(
+            id: "maya",
+            displayName: "Maya Chen",
+            profileTitle: "Product",
+            availability: UserAvailability(
+                presence: .unknown,
+                customStatus: UserCustomStatus(
+                    text: "Heads down",
+                    emoji: ":headphones:",
+                    expiresAt: nil
+                )
+            )
+        )
+        let store = AppStore(conversations: [], users: [user])
+        let updated = UserAvailability(
+            presence: .away,
+            customStatus: user.availability.customStatus,
+            doNotDisturb: UserDoNotDisturb(isEnabled: true, endsAt: nil),
+            fetchedAt: Date(timeIntervalSince1970: 500)
+        )
+
+        store.updateAvailability(updated, for: user.id)
+
+        #expect(store.user(withID: user.id)?.availability == updated)
+        #expect(store.quickSwitcherUsers.first?.availability == updated)
     }
 
     @Test

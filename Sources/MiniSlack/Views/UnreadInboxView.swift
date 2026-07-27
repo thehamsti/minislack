@@ -24,6 +24,7 @@ struct UnreadInboxView: View {
                                     store.select(conversation.id)
                                 } label: {
                                     UnreadCard(
+                                        store: store,
                                         conversation: conversation,
                                         compact: compact,
                                         isKeyboardSelected: store.keyboardConversationID == conversation.id
@@ -89,6 +90,7 @@ private struct UnreadHeader: View {
 }
 
 private struct UnreadCard: View {
+    let store: AppStore
     let conversation: Conversation
     let compact: Bool
     let isKeyboardSelected: Bool
@@ -97,7 +99,7 @@ private struct UnreadCard: View {
         VStack(alignment: .leading, spacing: compact ? 7 : 10) {
             HStack(spacing: 8) {
                 if conversation.isDirectMessage {
-                    ConversationAvatar(conversation: conversation, size: 22)
+                    ConversationAvatar(store: store, conversation: conversation, size: 22)
                 } else {
                     Image(systemName: conversation.systemImage)
                         .font(.caption.weight(.semibold))
@@ -116,18 +118,23 @@ private struct UnreadCard: View {
             }
 
             if let message = conversation.latestMessage {
+                let user = message.authorUserID.flatMap(store.user(withID:))
+                let displayName = user?.displayName ?? message.author
+
                 HStack(alignment: .top, spacing: 8) {
                     UserAvatar(
-                        imageURL: message.authorAvatarURL,
-                        initials: message.initials,
-                        accessibilityName: message.author,
-                        size: 24
+                        imageURL: user?.avatarURL ?? message.authorAvatarURL,
+                        initials: user?.initials ?? message.initials,
+                        accessibilityName: displayName,
+                        size: 24,
+                        availability: user?.availability
+                            ?? message.authorUserID.map { _ in UserAvailability() }
                     )
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(message.author)
+                        Text(displayName)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text(message.body)
+                        Text(message.displayBody)
                             .font(.callout)
                             .foregroundStyle(.primary)
                             .lineLimit(compact ? 2 : 3)

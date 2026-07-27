@@ -11,7 +11,12 @@ windows.
 - Conversation history, reactions, composer, mark-read behavior, and settings
 - Paginated, disk-cached history with older messages loaded as you scroll upward
 - Configurable Off / Slow / Balanced / Fast background history backfill
+- Full Slack standard emoji aliases, skin tones, and workspace custom emoji
+- Resolved user/channel/broadcast mentions and Slack link/entity text
+- Cursor-aware `@` people and `#` channel tagging with native keyboard selection
+- Conversation-scoped drafts and native Copy Text message actions
 - Quick switcher with an Unreads destination, channel search, and workspace-user DMs
+- Live user presence, DND badges, and expiring custom statuses across user surfaces
 - Light and dark mode through semantic macOS colors and materials
 
 ## Keyboard shortcuts
@@ -26,9 +31,13 @@ windows.
 | Move selection | `J` / `K` or `↓` / `↑` |
 | Open selection | `L`, `→`, or `Return` |
 | Back to Unreads | `H`, `←`, or `Escape` |
+| Choose a composer tag | `↑` / `↓`, then `Return` or `Tab` |
+| Dismiss composer tags | `Escape` |
 
 Vim and unmodified arrow-key navigation pause automatically while the composer
 or quick-switcher search field is active, so typing remains unaffected.
+In the composer, type `@` to tag a person or `#` to link a channel. Selected
+results keep their readable names in the draft and send Slack's stable IDs.
 
 ## Run
 
@@ -55,6 +64,14 @@ environment setup is required.
 4. Run `./script/build_and_run.sh`.
 5. Choose **Continue with Slack**.
 
+When updating an existing Slack app, add the manifest's `dnd:read` user scope,
+reinstall the app to the workspace, and reconnect Mini Slack once so the new
+scope is included in the user token.
+
+Slack reports other members as `active` or `away`; only the signed-in user's
+detailed response can confirm `offline`. Mini Slack shows `Away` for remote
+members instead of guessing that they are offline.
+
 The Client ID is public configuration. Mini Slack uses Slack's native-app PKCE
 flow, so no client secret is embedded or required. Access and rotating refresh
 tokens are stored in the macOS Keychain.
@@ -75,5 +92,6 @@ metadata from the Documents folder cannot interfere with test-bundle signing.
 
 The live connection currently loads workspace users, channels, private channels,
 DMs, unread metadata, and recent message history on demand. Sending messages,
-opening DMs, and marking conversations read use Slack's Web API. Real-time event
-delivery, threads, files, search, and native notifications remain future work.
+opening DMs, and marking conversations read use Slack's Web API. See
+[`CAPABILITY_ROADMAP.md`](./CAPABILITY_ROADMAP.md) for the capability-parity plan,
+performance guardrails, and Slack platform limits.

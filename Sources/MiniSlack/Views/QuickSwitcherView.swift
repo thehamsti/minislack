@@ -77,7 +77,10 @@ struct QuickSwitcherView: View {
                                 quickSwitcherSection("Direct message") {
                                     ForEach(users) { user in
                                         resultButton(item: .user(user.id)) {
-                                            UserQuickSwitcherRow(user: user)
+                                            UserQuickSwitcherRow(
+                                                user: user,
+                                                customEmojiURLs: store.customEmojiURLs
+                                            )
                                         }
                                     }
                                 }
@@ -87,7 +90,10 @@ struct QuickSwitcherView: View {
                                 quickSwitcherSection("Group messages") {
                                     ForEach(groupMessages) { conversation in
                                         resultButton(item: .channel(conversation.id)) {
-                                            ChannelQuickSwitcherRow(conversation: conversation)
+                                            ChannelQuickSwitcherRow(
+                                                store: store,
+                                                conversation: conversation
+                                            )
                                         }
                                     }
                                 }
@@ -97,7 +103,10 @@ struct QuickSwitcherView: View {
                                 quickSwitcherSection("Channels") {
                                     ForEach(channels) { conversation in
                                         resultButton(item: .channel(conversation.id)) {
-                                            ChannelQuickSwitcherRow(conversation: conversation)
+                                            ChannelQuickSwitcherRow(
+                                                store: store,
+                                                conversation: conversation
+                                            )
                                         }
                                     }
                                 }
@@ -193,6 +202,7 @@ struct QuickSwitcherView: View {
 
 private struct UserQuickSwitcherRow: View {
     let user: WorkspaceUser
+    let customEmojiURLs: [String: URL]
 
     var body: some View {
         HStack(spacing: 10) {
@@ -201,15 +211,16 @@ private struct UserQuickSwitcherRow: View {
                 initials: user.initials,
                 accessibilityName: user.displayName,
                 size: 28,
-                isActive: user.isActive
+                availability: user.availability
             )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(user.displayName)
                     .fontWeight(.medium)
-                Text(user.status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                UserStatusLabel(
+                    user: user,
+                    customEmojiURLs: customEmojiURLs
+                )
             }
 
             Spacer()
@@ -222,12 +233,13 @@ private struct UserQuickSwitcherRow: View {
 }
 
 private struct ChannelQuickSwitcherRow: View {
+    let store: AppStore
     let conversation: Conversation
 
     var body: some View {
         HStack(spacing: 10) {
             if conversation.isDirectMessage {
-                ConversationAvatar(conversation: conversation, size: 28)
+                ConversationAvatar(store: store, conversation: conversation, size: 28)
             } else {
                 Image(systemName: "number")
                     .foregroundStyle(.secondary)

@@ -47,10 +47,12 @@ final class AppStore {
 
     var conversations: [Conversation]
     var users: [WorkspaceUser]
+    var customEmojiURLs: [String: URL]
     var connectionState: ConnectionState
     var transientError: String?
     var destination: Destination = .unreadInbox
-    var draft = ""
+    private var draftsByConversationID: [String: ComposerDraft] = [:]
+    private var composerSuggestionIndex: ComposerSuggestionIndex
     var quickSwitcherQuery = ""
     var quickSwitcherSelection: QuickSwitcherItem?
     var keyboardConversationID: String?
@@ -59,14 +61,19 @@ final class AppStore {
     private let credentialStore: SlackCredentialStore?
     private let slackAPI: SlackAPIClient?
     private var credentials: SlackCredentials?
+    private var messageUsers: [WorkspaceUser]
+    private var usersByID: [String: WorkspaceUser]
     private var historyCache: MessageHistoryCache?
     private var loadedHistoryPageCounts: [String: Int] = [:]
     private var historyBackfillTask: Task<Void, Never>?
+    private var availabilityRefreshTask: Task<Void, Never>?
+    private var canRefreshDoNotDisturb = true
     private var backfillConversationIndex = 0
 
     init(
         conversations: [Conversation] = SampleData.conversations(),
         users: [WorkspaceUser] = SampleData.users,
+        customEmojiURLs: [String: URL] = [:],
         connectionState: ConnectionState = .preview,
         slackOAuth: SlackOAuthService? = nil,
         credentialStore: SlackCredentialStore? = nil,
@@ -74,10 +81,17 @@ final class AppStore {
     ) {
         self.conversations = conversations
         self.users = users
+        self.customEmojiURLs = customEmojiURLs
         self.connectionState = connectionState
         self.slackOAuth = slackOAuth
         self.credentialStore = credentialStore
         self.slackAPI = slackAPI
+        messageUsers = users
+        usersByID = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        composerSuggestionIndex = ComposerSuggestionIndex(
+            users: users,
+            conversations: conversations
+        )
         keyboardConversationID = unreadConversations.first?.id
     }
 
@@ -115,6 +129,48 @@ final class AppStore {
             return nil
         }
         return conversations.first { $0.id == id }
+    }
+
+    func user(withID userID: String) -> WorkspaceUser? {
+        usersByID[userID]
+    }
+
+    var composerDraft: ComposerDraft {
+        get {
+            guard case let .conversation(id) = destination else {
+                return ComposerDraft()
+            }
+            return draftsByConversationID[id] ?? ComposerDraft()
+        }
+        set {
+            guard case let .conversation(id) = destination else {
+                return
+            }
+            if newValue.isEmpty {
+                draftsByConversationID.removeValue(forKey: id)
+            } else {
+                draftsByConversationID[id] = newValue
+            }
+        }
+    }
+
+    var draft: String {
+        get {
+            composerDraft.text
+        }
+        set {
+            composerDraft = ComposerDraft(text: newValue)
+        }
+    }
+
+    func composerSuggestions(
+        for query: ComposerQuery,
+        allowsBroadcasts: Bool
+    ) -> [ComposerSuggestion] {
+        composerSuggestionIndex.matches(
+            query: query,
+            allowsBroadcasts: allowsBroadcasts
+        )
     }
 
     var favoriteConversations: [Conversation] {
@@ -440,8 +496,10 @@ final class AppStore {
     }
 
     func sendDraft() {
-        let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDraft.isEmpty,
+        let activeDraft = composerDraft
+        let displayText = activeDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outgoingText = activeDraft.slackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayText.isEmpty,
               case let .conversation(id) = destination,
               let index = conversations.firstIndex(where: { $0.id == id })
         else {
@@ -453,19 +511,21 @@ final class AppStore {
         }
         let optimisticMessage = Message(
             author: currentUser?.displayName ?? "You",
-            body: trimmedDraft,
+            authorUserID: currentUser?.id,
+            body: outgoingText,
             timestamp: .now,
             authorAvatarURL: currentUser?.avatarURL,
-            isCurrentUser: true
+            isCurrentUser: true,
+            displayBody: SlackEmoji.replacingUnicodeShortcodes(in: displayText)
         )
         conversations[index].messages.append(optimisticMessage)
         conversations[index].latestActivity = .now
-        draft = ""
+        composerDraft = ComposerDraft()
         if slackAPI != nil {
             Task {
                 await sendLiveMessage(
                     channelID: id,
-                    text: trimmedDraft,
+                    text: outgoingText,
                     localMessageID: optimisticMessage.id
                 )
             }
@@ -538,6 +598,8 @@ final class AppStore {
     func signOut() {
         historyBackfillTask?.cancel()
         historyBackfillTask = nil
+        availabilityRefreshTask?.cancel()
+        availabilityRefreshTask = nil
         do {
             try credentialStore?.delete()
         } catch {
@@ -545,7 +607,12 @@ final class AppStore {
         }
         credentials = nil
         users = []
+        messageUsers = []
+        usersByID = [:]
+        customEmojiURLs = [:]
         conversations = []
+        draftsByConversationID = [:]
+        composerSuggestionIndex = ComposerSuggestionIndex(users: [], conversations: [])
         historyStates = [:]
         loadedHistoryPageCounts = [:]
         historyCache = nil
@@ -572,14 +639,25 @@ final class AppStore {
         credentials = activeCredentials
         historyCache = MessageHistoryCache(workspaceID: activeCredentials.teamID)
         users = snapshot.users
+        messageUsers = snapshot.messageUsers
+        usersByID = Dictionary(
+            uniqueKeysWithValues: snapshot.messageUsers.map { ($0.id, $0) }
+        )
+        customEmojiURLs = snapshot.customEmojiURLs
         conversations = snapshot.conversations
+        composerSuggestionIndex = ComposerSuggestionIndex(
+            users: snapshot.users,
+            conversations: snapshot.conversations
+        )
         destination = .unreadInbox
         keyboardConversationID = unreadConversations.first?.id
         connectionState = .connected(activeCredentials.teamName)
+        canRefreshDoNotDisturb = true
         Task {
             await refreshConversationMetadata(accessToken: activeCredentials.accessToken)
         }
         startHistoryBackfill()
+        startAvailabilityRefresh()
     }
 
     private func activeCredentials() async throws -> SlackCredentials {
@@ -620,7 +698,8 @@ final class AppStore {
             let page = try await slackAPI.fetchMessagePage(
                 channelID: channelID,
                 accessToken: credentials.accessToken,
-                users: users,
+                users: messageUsers,
+                channelNames: conversationNamesByID,
                 currentUserID: credentials.userID
             )
             if let historyCache {
@@ -697,7 +776,8 @@ final class AppStore {
                 channelID: channelID,
                 cursor: cursor,
                 accessToken: credentials.accessToken,
-                users: users,
+                users: messageUsers,
+                channelNames: conversationNamesByID,
                 currentUserID: credentials.userID
             )
             let cachedPage = MessageHistoryPage(
@@ -807,6 +887,10 @@ final class AppStore {
         quickSwitcherQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var conversationNamesByID: [String: String] {
+        Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0.title) })
+    }
+
     private func sortedByLatestActivity(_ conversations: [Conversation]) -> [Conversation] {
         sortedConversations(conversations, by: .activity)
     }
@@ -836,13 +920,233 @@ final class AppStore {
             return
         }
         var messagesByID: [String: Message] = [:]
-        for message in conversations[index].messages + messages {
+        for message in conversations[index].messages {
+            let key = message.remoteID.map { "remote:\($0)" } ?? "local:\(message.id)"
+            messagesByID[key] = message
+        }
+        let formattingContext = SlackMessageFormatting.Context(
+            userNames: Dictionary(
+                uniqueKeysWithValues: messageUsers.map { ($0.id, $0.displayName) }
+            ),
+            channelNames: conversationNamesByID
+        )
+        for message in messages {
+            let message = message.preparingForDisplay(context: formattingContext)
             let key = message.remoteID.map { "remote:\($0)" } ?? "local:\(message.id)"
             messagesByID[key] = message
         }
         conversations[index].messages = messagesByID.values.sorted {
             $0.timestamp < $1.timestamp
         }
+    }
+
+    func updateAvailability(_ availability: UserAvailability, for userID: String) {
+        guard let user = usersByID[userID] else {
+            return
+        }
+        let updated = WorkspaceUser(
+            id: user.id,
+            displayName: user.displayName,
+            profileTitle: user.profileTitle,
+            availability: availability,
+            avatarURL: user.avatarURL
+        )
+        usersByID[userID] = updated
+        if let index = users.firstIndex(where: { $0.id == userID }) {
+            users[index] = updated
+        }
+        if let index = messageUsers.firstIndex(where: { $0.id == userID }) {
+            messageUsers[index] = updated
+        }
+    }
+
+    private func applyUserProfiles(_ profiles: [WorkspaceUser]) {
+        let profilesByID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+        let mergedByID = usersByID.mapValues { current in
+            guard let profile = profilesByID[current.id] else {
+                return current
+            }
+            let presence: UserPresence = if profile.availability.presence == .notApplicable {
+                .notApplicable
+            } else if current.availability.presence == .notApplicable {
+                .unknown
+            } else {
+                current.availability.presence
+            }
+            return WorkspaceUser(
+                id: profile.id,
+                displayName: profile.displayName,
+                profileTitle: profile.profileTitle,
+                availability: UserAvailability(
+                    presence: presence,
+                    customStatus: profile.availability.customStatus,
+                    doNotDisturb: current.availability.doNotDisturb,
+                    fetchedAt: current.availability.fetchedAt
+                ),
+                avatarURL: profile.avatarURL
+            )
+        }
+        usersByID = mergedByID
+        users = users.map { mergedByID[$0.id] ?? $0 }
+        messageUsers = messageUsers.map { mergedByID[$0.id] ?? $0 }
+        for index in conversations.indices {
+            conversations[index].participants = conversations[index].participants.map {
+                mergedByID[$0.id] ?? $0
+            }
+            if let userID = conversations[index].participantUserID,
+               let participant = mergedByID[userID]
+            {
+                conversations[index].title = participant.displayName
+                conversations[index].avatarURL = participant.avatarURL
+            } else if conversations[index].kind == .groupDirectMessage,
+                      !conversations[index].participants.isEmpty
+            {
+                conversations[index].title = conversations[index].participants
+                    .map(\.displayName)
+                    .joined(separator: ", ")
+            }
+        }
+        composerSuggestionIndex = ComposerSuggestionIndex(
+            users: users,
+            conversations: conversations
+        )
+    }
+
+    private func applyDoNotDisturb(_ statuses: [String: UserDoNotDisturb]) {
+        var updatedByID = usersByID
+        for (userID, doNotDisturb) in statuses {
+            guard let user = updatedByID[userID] else {
+                continue
+            }
+            updatedByID[userID] = WorkspaceUser(
+                id: user.id,
+                displayName: user.displayName,
+                profileTitle: user.profileTitle,
+                availability: UserAvailability(
+                    presence: user.availability.presence,
+                    customStatus: user.availability.customStatus,
+                    doNotDisturb: doNotDisturb,
+                    fetchedAt: user.availability.fetchedAt
+                ),
+                avatarURL: user.avatarURL
+            )
+        }
+        usersByID = updatedByID
+        users = users.map { updatedByID[$0.id] ?? $0 }
+        messageUsers = messageUsers.map { updatedByID[$0.id] ?? $0 }
+    }
+
+    private func startAvailabilityRefresh() {
+        availabilityRefreshTask?.cancel()
+        availabilityRefreshTask = Task { [weak self] in
+            await self?.runAvailabilityRefresh()
+        }
+    }
+
+    private func runAvailabilityRefresh() async {
+        var nextProfileRefresh = Date.now.addingTimeInterval(300)
+        while !Task.isCancelled {
+            guard let slackAPI else {
+                return
+            }
+            guard let credentials = try? await activeCredentials() else {
+                try? await Task.sleep(for: .seconds(30))
+                continue
+            }
+
+            if Date.now >= nextProfileRefresh {
+                if let profiles = try? await slackAPI.fetchWorkspaceUsers(
+                    accessToken: credentials.accessToken
+                ) {
+                    applyUserProfiles(profiles)
+                }
+                nextProfileRefresh = Date.now.addingTimeInterval(300)
+            }
+
+            let userIDs = availabilityPriorityUserIDs
+            if canRefreshDoNotDisturb, !userIDs.isEmpty {
+                do {
+                    let statuses = try await slackAPI.fetchDoNotDisturb(
+                        userIDs: userIDs,
+                        accessToken: credentials.accessToken
+                    )
+                    applyDoNotDisturb(statuses)
+                } catch let SlackAPIClient.APIError.slack(error) where error == "missing_scope" {
+                    canRefreshDoNotDisturb = false
+                } catch let SlackAPIClient.APIError.rateLimited(seconds) {
+                    try? await Task.sleep(for: .seconds(seconds))
+                } catch {
+                    // Presence can still refresh when DND is unavailable.
+                }
+            }
+
+            for userID in userIDs {
+                guard !Task.isCancelled else {
+                    return
+                }
+                guard let user = usersByID[userID] else {
+                    continue
+                }
+                do {
+                    let presence = try await slackAPI.fetchPresence(
+                        userID: userID,
+                        currentUserID: credentials.userID,
+                        accessToken: credentials.accessToken
+                    )
+                    updateAvailability(
+                        UserAvailability(
+                            presence: presence,
+                            customStatus: user.availability.customStatus,
+                            doNotDisturb: user.availability.doNotDisturb,
+                            fetchedAt: .now
+                        ),
+                        for: userID
+                    )
+                } catch let SlackAPIClient.APIError.rateLimited(seconds) {
+                    try? await Task.sleep(for: .seconds(seconds))
+                } catch {
+                    // Keep the last truthful state until the next refresh.
+                }
+                try? await Task.sleep(for: .milliseconds(1_250))
+            }
+
+            try? await Task.sleep(for: .seconds(60))
+        }
+    }
+
+    private var availabilityPriorityUserIDs: [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        func append(_ userID: String?) {
+            guard let userID,
+                  seen.insert(userID).inserted,
+                  usersByID[userID]?.availability.presence != .notApplicable
+            else {
+                return
+            }
+            result.append(userID)
+        }
+
+        append(credentials?.userID)
+        if let selectedConversation {
+            append(selectedConversation.participantUserID)
+            selectedConversation.participants.forEach { append($0.id) }
+            selectedConversation.messages.suffix(50).forEach { append($0.authorUserID) }
+        }
+        for conversation in conversations.sorted(by: { $0.latestActivity > $1.latestActivity }) {
+            append(conversation.participantUserID)
+            conversation.participants.forEach { append($0.id) }
+        }
+        users
+            .sorted { lhs, rhs in
+                if lhs.availability.presence != rhs.availability.presence {
+                    return lhs.availability.presence == .active
+                }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                    == .orderedAscending
+            }
+            .forEach { append($0.id) }
+        return result
     }
 
     private func startHistoryBackfill() {
@@ -885,7 +1189,8 @@ final class AppStore {
                     channelID: conversationID,
                     cursor: status.pageCount == 0 ? nil : status.nextCursor,
                     accessToken: credentials.accessToken,
-                    users: users,
+                    users: messageUsers,
+                    channelNames: conversationNamesByID,
                     currentUserID: credentials.userID
                 )
                 try await historyCache.store(

@@ -1,3 +1,5 @@
+import AppKit
+import EmojiText
 import SwiftUI
 
 struct ConversationView: View {
@@ -53,7 +55,7 @@ private struct ConversationHeader: View {
             }
 
             if conversation.isDirectMessage {
-                ConversationAvatar(conversation: conversation, size: 28)
+                ConversationAvatar(store: store, conversation: conversation, size: 28)
             } else {
                 Image(systemName: conversation.systemImage)
                     .foregroundStyle(.secondary)
@@ -62,7 +64,14 @@ private struct ConversationHeader: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(conversation.title)
                     .font(.headline)
-                if let subtitle = conversation.subtitle {
+                if let userID = conversation.participantUserID,
+                   let user = store.user(withID: userID)
+                {
+                    UserStatusLabel(
+                        user: user,
+                        customEmojiURLs: store.customEmojiURLs
+                    )
+                } else if let subtitle = conversation.subtitle {
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -116,7 +125,11 @@ private struct MessageList: View {
                     }
 
                     ForEach(conversation.messages) { message in
-                        MessageRow(message: message)
+                        MessageRow(
+                            store: store,
+                            message: message,
+                            customEmojiURLs: store.customEmojiURLs
+                        )
                             .id(message.id)
                     }
 
@@ -208,20 +221,27 @@ private struct HistoryErrorRow: View {
 }
 
 private struct MessageRow: View {
+    let store: AppStore
     let message: Message
+    let customEmojiURLs: [String: URL]
 
     var body: some View {
+        let user = message.authorUserID.flatMap(store.user(withID:))
+        let displayName = user?.displayName ?? message.author
+
         HStack(alignment: .top, spacing: 10) {
             UserAvatar(
-                imageURL: message.authorAvatarURL,
-                initials: message.initials,
-                accessibilityName: message.author,
+                imageURL: user?.avatarURL ?? message.authorAvatarURL,
+                initials: user?.initials ?? message.initials,
+                accessibilityName: displayName,
+                availability: user?.availability
+                    ?? message.authorUserID.map { _ in UserAvailability() },
                 isCurrentUser: message.isCurrentUser
             )
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(message.author)
+                    Text(displayName)
                         .font(.callout.weight(.semibold))
                     Text(message.timestamp, style: .time)
                         .font(.caption2)
@@ -229,14 +249,20 @@ private struct MessageRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                Text(message.body)
+                SlackEmojiText(
+                    text: message.displayBody,
+                    customEmojiURLs: customEmojiURLs
+                )
                     .font(.callout)
                     .textSelection(.enabled)
 
                 if !message.reactions.isEmpty {
                     HStack(spacing: 5) {
                         ForEach(message.reactions, id: \.self) { reaction in
-                            Text("\(reaction.emoji) \(reaction.count)")
+                            SlackEmojiText(
+                                text: "\(reaction.emoji) \(reaction.count)",
+                                customEmojiURLs: customEmojiURLs
+                            )
                                 .font(.caption)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)
@@ -251,46 +277,24 @@ private struct MessageRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+        .contextMenu {
+            Button("Copy Text", systemImage: "doc.on.doc") {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(message.displayBody, forType: .string)
+            }
+        }
     }
 }
 
-private struct ComposerView: View {
-    let store: AppStore
-    let conversation: Conversation
+private struct SlackEmojiText: View {
+    let text: String
+    let customEmojiURLs: [String: URL]
 
     var body: some View {
-        @Bindable var store = store
-
-        VStack(spacing: 0) {
-            Divider()
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message \(conversation.kind == .channel ? "#" : "")\(conversation.title)", text: $store.draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1 ... 5)
-                    .onSubmit {
-                        store.sendDraft()
-                    }
-
-                Button {
-                    store.sendDraft()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.orange))
-                .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Send message")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(.separator, lineWidth: 0.5)
-            }
-            .padding(10)
+        let customEmoji = Set(SlackEmoji.shortcodeNames(in: text)).compactMap { name in
+            customEmojiURLs[name].map { RemoteEmoji(shortcode: name, url: $0) }
         }
-        .background(.bar)
+        EmojiText(verbatim: text, emojis: customEmoji)
     }
 }

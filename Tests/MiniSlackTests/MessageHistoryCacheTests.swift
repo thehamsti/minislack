@@ -4,6 +4,48 @@ import Testing
 
 struct MessageHistoryCacheTests {
     @Test
+    func decodesPagesCachedBeforeEmojiMetadataWasAdded() throws {
+        let messageID = UUID()
+        let json = """
+        {
+          "id": "\(messageID.uuidString)",
+          "author": "Maya",
+          "body": "Hello",
+          "timestamp": 100,
+          "isCurrentUser": false,
+          "reactions": []
+        }
+        """
+
+        let message = try JSONDecoder().decode(Message.self, from: Data(json.utf8))
+
+        #expect(message.emojiUnicode.isEmpty)
+        #expect(message.displayBody == "Hello")
+        #expect(message.authorUserID == nil)
+    }
+
+    @Test
+    func preparesCachedMessagesWithTheCurrentWorkspaceContext() {
+        let message = Message(
+            author: "Sam",
+            authorUserID: "U2",
+            body: "<@U1> check <#C1> :moneybag:",
+            timestamp: .now,
+            reactions: [Reaction(emoji: ":+1::skin-tone-3:", count: 2)]
+        )
+        let context = SlackMessageFormatting.Context(
+            userNames: ["U1": "Maya"],
+            channelNames: ["C1": "clientcredentials"]
+        )
+
+        let prepared = message.preparingForDisplay(context: context)
+
+        #expect(prepared.displayBody == "@Maya check #clientcredentials 💰")
+        #expect(prepared.authorUserID == "U2")
+        #expect(prepared.reactions == [Reaction(emoji: "👍🏼", count: 2)])
+    }
+
+    @Test
     func cachedPagesRoundTripAndResumeFromTheOldestCursor() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
