@@ -326,7 +326,9 @@ extension AppStore {
             return
         }
         let conversationIDs = conversations
-            .filter { $0.kind == .groupDirectMessage }
+            .filter {
+                $0.kind == .groupDirectMessage && $0.participants.isEmpty
+            }
             .sorted {
                 if $0.isUnread != $1.isUnread {
                     return $0.isUnread

@@ -50,6 +50,10 @@ struct ContentView: View {
                 if !windowState.isQuickSwitcherPresented,
                    !windowState.isWorkspaceSearchPresented
                 {
+                    if action == .back, windowState.selectedThread != nil {
+                        windowState.dismissThread()
+                        return
+                    }
                     store.handleKeyboardNavigation(action)
                 }
             }

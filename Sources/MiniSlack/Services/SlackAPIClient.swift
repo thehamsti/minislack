@@ -1,6 +1,6 @@
 import Foundation
 
-struct SlackWorkspaceSnapshot: Sendable {
+struct SlackWorkspaceSnapshot: Codable, Sendable {
     let users: [WorkspaceUser]
     let messageUsers: [WorkspaceUser]
     let conversations: [Conversation]

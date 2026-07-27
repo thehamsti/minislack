@@ -1,6 +1,6 @@
 import Foundation
 
-enum UserPresence: String, Hashable, Sendable {
+enum UserPresence: String, Codable, Hashable, Sendable {
     case active
     case away
     case offline
@@ -23,7 +23,7 @@ enum UserPresence: String, Hashable, Sendable {
     }
 }
 
-struct UserCustomStatus: Hashable, Sendable {
+struct UserCustomStatus: Codable, Hashable, Sendable {
     let text: String
     let emoji: String?
     let expiresAt: Date?
@@ -33,7 +33,7 @@ struct UserCustomStatus: Hashable, Sendable {
     }
 }
 
-struct UserDoNotDisturb: Hashable, Sendable {
+struct UserDoNotDisturb: Codable, Hashable, Sendable {
     let isEnabled: Bool
     let endsAt: Date?
 
@@ -42,7 +42,7 @@ struct UserDoNotDisturb: Hashable, Sendable {
     }
 }
 
-struct UserAvailability: Hashable, Sendable {
+struct UserAvailability: Codable, Hashable, Sendable {
     let presence: UserPresence
     let customStatus: UserCustomStatus?
     let doNotDisturb: UserDoNotDisturb?

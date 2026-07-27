@@ -159,6 +159,7 @@ final class AppStore {
     var incrementalSyncCatchups: [String: IncrementalSyncCatchupState] = [:]
     var readCursorsByConversationID: [String: MessageHistoryReadCursor]
     var unreadBaselinedConversationIDs: Set<String>
+    var lastPolledAtByConversationID: [String: Date] = [:]
     var outgoingMessageOutbox: OutgoingMessageOutbox?
     var outgoingMessageReplayTask: Task<Void, Never>?
     var messageMutationQueue: MessageMutationQueue?
@@ -178,6 +179,9 @@ final class AppStore {
     private var canRefreshDoNotDisturb = true
     private var backfillConversationIndex = 0
     private let workspaceLoadTimeout: Duration
+    private let snapshotStoreRootURL: URL?
+    private var workspaceSnapshotStore: WorkspaceSnapshotStore?
+    static let presenceFreshnessThreshold: TimeInterval = 300
     let appTokenStore: (any SlackAppTokenStoring)?
     let clientIDStore: (any SlackClientIDStoring)?
     let socketModeClient: (any SlackSocketModeEventStreaming)?
@@ -199,7 +203,8 @@ final class AppStore {
         slackOAuthWebAuthenticator: (any SlackOAuthWebAuthenticating)? = nil,
         notificationService: (any MessageNotificationDelivering)? = nil,
         dockBadgeService: (any DockBadgeUpdating)? = nil,
-        workspaceLoadTimeout: Duration = .seconds(30)
+        workspaceLoadTimeout: Duration = .seconds(30),
+        snapshotStoreRootURL: URL? = nil
     ) {
         self.conversations = conversations
         self.users = users
@@ -219,6 +224,7 @@ final class AppStore {
         self.notificationService = notificationService ?? MacNotificationService.shared
         self.dockBadgeService = dockBadgeService ?? MacDockBadgeService.shared
         self.workspaceLoadTimeout = workspaceLoadTimeout
+        self.snapshotStoreRootURL = snapshotStoreRootURL
         readCursorsByConversationID = [:]
         unreadBaselinedConversationIDs = Set(conversations.map(\.id))
         messageUsers = users
@@ -524,6 +530,7 @@ final class AppStore {
     }
 
     func showUnreadInbox() {
+        workspaceSearchFocus = nil
         destination = .unreadInbox
         ensureKeyboardSelection()
     }
@@ -1155,6 +1162,8 @@ final class AppStore {
         incrementalSyncCatchups = [:]
         readCursorsByConversationID = [:]
         unreadBaselinedConversationIDs = []
+        lastPolledAtByConversationID = [:]
+        workspaceSnapshotStore = nil
         cancelOutgoingMessageReplay()
         cancelMessageMutationReplay()
         notificationService.onOpenConversation = nil
@@ -1225,79 +1234,234 @@ final class AppStore {
         }
         try credentialStore.save(activeCredentials)
         refreshWorkspaceAccounts()
-        let snapshot: SlackWorkspaceSnapshot
-        do {
-            snapshot = try await fetchWorkspaceSnapshot(
-                slackAPI: slackAPI,
-                credentials: activeCredentials
-            )
-        } catch {
-            guard connectionGeneration == workspaceSessionGeneration else {
-                throw WorkspaceSessionError.changed
-            }
-            throw error
-        }
+        let snapshotStore = WorkspaceSnapshotStore(
+            workspaceID: activeCredentials.teamID,
+            rootURL: snapshotStoreRootURL
+        )
+        let cachedState = await snapshotStore.load()
         guard connectionGeneration == workspaceSessionGeneration else {
             throw WorkspaceSessionError.changed
         }
+        let snapshot: SlackWorkspaceSnapshot
+        if let cachedState {
+            snapshot = cachedState.snapshot
+        } else {
+            do {
+                snapshot = try await fetchWorkspaceSnapshot(
+                    slackAPI: slackAPI,
+                    credentials: activeCredentials
+                )
+            } catch {
+                guard connectionGeneration == workspaceSessionGeneration else {
+                    throw WorkspaceSessionError.changed
+                }
+                throw error
+            }
+            guard connectionGeneration == workspaceSessionGeneration else {
+                throw WorkspaceSessionError.changed
+            }
+        }
+        workspaceSnapshotStore = snapshotStore
+        lastPolledAtByConversationID = cachedState?.lastPolledAtByConversationID ?? [:]
         credentials = activeCredentials
         workspaceSearchBackfillTask?.cancel()
         historyCache = MessageHistoryCache(workspaceID: activeCredentials.teamID)
-        users = snapshot.users
-        messageUsers = snapshot.messageUsers
-        usersByID = Dictionary(
-            uniqueKeysWithValues: snapshot.messageUsers.map { ($0.id, $0) }
-        )
-        customEmojiURLs = snapshot.customEmojiURLs
-        conversations = snapshot.conversations
-        readCursorsByConversationID = snapshot.readCursorsByConversationID
-        unreadBaselinedConversationIDs =
-            snapshot.conversationsWithAuthoritativeUnreadCounts
-        resetActivity(
-            conversations: snapshot.conversations,
-            currentUserID: activeCredentials.userID,
-            teamID: activeCredentials.teamID
-        )
-        workspaceSearchIndex.reset(conversations: snapshot.conversations)
-        composerSuggestionIndex = ComposerSuggestionIndex(
-            users: snapshot.users,
-            conversations: snapshot.conversations
-        )
-        destination = .unreadInbox
-        keyboardConversationID = unreadConversations.first?.id
+        applyWorkspaceSnapshot(snapshot, credentials: activeCredentials, phase: .initial)
         connectionState = .connected(activeCredentials.teamName)
         canRefreshDoNotDisturb = true
         let session = WorkspaceSession(
             generation: connectionGeneration,
             teamID: activeCredentials.teamID
         )
+        await startBackgroundWorkspaceServices(
+            session: session,
+            credentials: activeCredentials
+        )
+        if cachedState == nil {
+            persistWorkspaceState()
+        } else {
+            startWorkspaceOperation { [weak self] session in
+                await self?.refreshWorkspaceSnapshot(session: session)
+            }
+        }
+    }
+
+    private enum WorkspaceSnapshotPhase {
+        case initial
+        case refresh
+    }
+
+    private func applyWorkspaceSnapshot(
+        _ snapshot: SlackWorkspaceSnapshot,
+        credentials: SlackCredentials,
+        phase: WorkspaceSnapshotPhase
+    ) {
+        users = snapshot.users
+        messageUsers = snapshot.messageUsers
+        usersByID = Dictionary(
+            uniqueKeysWithValues: snapshot.messageUsers.map { ($0.id, $0) }
+        )
+        customEmojiURLs = snapshot.customEmojiURLs
+        switch phase {
+        case .initial:
+            conversations = snapshot.conversations
+            readCursorsByConversationID = snapshot.readCursorsByConversationID
+            unreadBaselinedConversationIDs =
+                snapshot.conversationsWithAuthoritativeUnreadCounts
+            resetActivity(
+                conversations: snapshot.conversations,
+                currentUserID: credentials.userID,
+                teamID: credentials.teamID
+            )
+            workspaceSearchIndex.reset(conversations: snapshot.conversations)
+            composerSuggestionIndex = ComposerSuggestionIndex(
+                users: snapshot.users,
+                conversations: snapshot.conversations
+            )
+            destination = .unreadInbox
+            keyboardConversationID = unreadConversations.first?.id
+        case .refresh:
+            conversations = Self.mergedConversations(
+                local: conversations,
+                fresh: snapshot.conversations,
+                localCursors: readCursorsByConversationID,
+                freshCursors: snapshot.readCursorsByConversationID
+            )
+            let mergedIDs = Set(conversations.map(\.id))
+            var mergedCursors = snapshot.readCursorsByConversationID
+            for (conversationID, localCursor) in readCursorsByConversationID
+                where mergedIDs.contains(conversationID)
+            {
+                if Self.localReadStateIsNewer(
+                    localCursor: localCursor,
+                    freshCursor: mergedCursors[conversationID]
+                ) {
+                    mergedCursors[conversationID] = localCursor
+                }
+            }
+            readCursorsByConversationID = mergedCursors
+            unreadBaselinedConversationIDs.formUnion(
+                snapshot.conversationsWithAuthoritativeUnreadCounts
+            )
+        }
+    }
+
+    nonisolated static func mergedConversations(
+        local: [Conversation],
+        fresh: [Conversation],
+        localCursors: [String: MessageHistoryReadCursor],
+        freshCursors: [String: MessageHistoryReadCursor]
+    ) -> [Conversation] {
+        let localByID = Dictionary(local.map { ($0.id, $0) }) { first, _ in first }
+        return fresh.map { freshConversation in
+            guard let localConversation = localByID[freshConversation.id] else {
+                return freshConversation
+            }
+            var merged = freshConversation
+            merged.messages = localConversation.messages
+            merged.latestActivity = max(
+                localConversation.latestActivity,
+                freshConversation.latestActivity
+            )
+            if localReadStateIsNewer(
+                localCursor: localCursors[freshConversation.id],
+                freshCursor: freshCursors[freshConversation.id]
+            ) {
+                merged.unreadCount = localConversation.unreadCount
+                merged.mentionCount = localConversation.mentionCount
+            }
+            return merged
+        }
+    }
+
+    private nonisolated static func localReadStateIsNewer(
+        localCursor: MessageHistoryReadCursor?,
+        freshCursor: MessageHistoryReadCursor?
+    ) -> Bool {
+        switch (localCursor?.timestamp, freshCursor?.timestamp) {
+        case let (localTimestamp?, freshTimestamp?):
+            localTimestamp >= freshTimestamp
+        case (_?, nil):
+            true
+        default:
+            false
+        }
+    }
+
+    private func startBackgroundWorkspaceServices(
+        session: WorkspaceSession,
+        credentials: SlackCredentials
+    ) async {
         startWorkspaceOperation { [weak self] session in
             await self?.refreshCustomEmoji(session: session)
         }
         startWorkspaceOperation { [weak self] session in
             await self?.hydratePriorityGroupDirectMessages(session: session)
         }
-        await loadSavedMessages(for: activeCredentials.teamID, session: session)
+        await loadSavedMessages(for: credentials.teamID, session: session)
         guard isCurrentWorkspaceSession(session) else {
             return
         }
-        await restoreOutgoingMessages(for: activeCredentials.teamID)
+        await restoreOutgoingMessages(for: credentials.teamID)
         guard isCurrentWorkspaceSession(session) else {
             return
         }
-        await restoreMessageMutations(for: activeCredentials.teamID)
+        await restoreMessageMutations(for: credentials.teamID)
         guard isCurrentWorkspaceSession(session) else {
             return
         }
         startHistoryBackfill()
         startWorkspaceSearchBackfill()
         startAvailabilityRefresh()
-        loadConversationMutes(workspaceID: activeCredentials.teamID)
+        loadConversationMutes(workspaceID: credentials.teamID)
         refreshDockBadge()
         startIncrementalSync()
         startSocketMode()
         scheduleOutgoingMessageReplay()
         scheduleMessageMutationReplay()
+    }
+
+    private func refreshWorkspaceSnapshot(session: WorkspaceSession) async {
+        guard let slackAPI,
+              let credentials = try? await activeCredentials(for: session),
+              let snapshot = try? await slackAPI.fetchWorkspace(
+                  accessToken: credentials.accessToken,
+                  currentUserID: credentials.userID
+              ),
+              isCurrentWorkspaceSession(session)
+        else {
+            return
+        }
+        applyWorkspaceSnapshot(snapshot, credentials: credentials, phase: .refresh)
+        persistWorkspaceState()
+    }
+
+    private func persistWorkspaceState() {
+        guard let credentials else {
+            return
+        }
+        let store = workspaceSnapshotStore
+            ?? WorkspaceSnapshotStore(
+                workspaceID: credentials.teamID,
+                rootURL: snapshotStoreRootURL
+            )
+        workspaceSnapshotStore = store
+        let state = CachedWorkspaceState(
+            savedAt: .now,
+            snapshot: SlackWorkspaceSnapshot(
+                users: users,
+                messageUsers: messageUsers,
+                conversations: conversations,
+                customEmojiURLs: customEmojiURLs,
+                readCursorsByConversationID: readCursorsByConversationID,
+                conversationsWithAuthoritativeUnreadCounts:
+                    unreadBaselinedConversationIDs
+            ),
+            lastPolledAtByConversationID: lastPolledAtByConversationID
+        )
+        Task {
+            try? await store.save(state)
+        }
     }
 
     private func fetchWorkspaceSnapshot(
@@ -2003,6 +2167,7 @@ final class AppStore {
 
     private func runAvailabilityRefresh() async {
         var nextProfileRefresh = Date.now.addingTimeInterval(300)
+        var isFirstPass = true
         while !Task.isCancelled {
             guard let slackAPI else {
                 return
@@ -2046,7 +2211,19 @@ final class AppStore {
                 }
             }
 
-            for userID in userIDs {
+            let presenceUserIDs: [String]
+            if isFirstPass {
+                presenceUserIDs = Self.userIDsWithStalePresence(
+                    userIDs,
+                    usersByID: usersByID,
+                    now: .now,
+                    freshnessThreshold: Self.presenceFreshnessThreshold
+                )
+                isFirstPass = false
+            } else {
+                presenceUserIDs = userIDs
+            }
+            for userID in presenceUserIDs {
                 guard !Task.isCancelled else {
                     return
                 }
@@ -2080,6 +2257,20 @@ final class AppStore {
             }
 
             try? await Task.sleep(for: .seconds(60))
+        }
+    }
+
+    nonisolated static func userIDsWithStalePresence(
+        _ userIDs: [String],
+        usersByID: [String: WorkspaceUser],
+        now: Date,
+        freshnessThreshold: TimeInterval
+    ) -> [String] {
+        userIDs.filter { userID in
+            guard let fetchedAt = usersByID[userID]?.availability.fetchedAt else {
+                return true
+            }
+            return now.timeIntervalSince(fetchedAt) >= freshnessThreshold
         }
     }
 

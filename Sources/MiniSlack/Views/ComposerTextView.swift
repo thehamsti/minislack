@@ -13,6 +13,7 @@ struct ComposerTextView: NSViewRepresentable {
     let dismissSuggestions: () -> Void
     let format: (ComposerFormatting) -> Void
     let send: () -> Void
+    let onEscape: (() -> Void)?
 
     init(
         draft: Binding<ComposerDraft>,
@@ -25,7 +26,8 @@ struct ComposerTextView: NSViewRepresentable {
         acceptSuggestion: @escaping () -> Void,
         dismissSuggestions: @escaping () -> Void,
         format: @escaping (ComposerFormatting) -> Void,
-        send: @escaping () -> Void
+        send: @escaping () -> Void,
+        onEscape: (() -> Void)? = nil
     ) {
         _draft = draft
         _selection = selection
@@ -38,6 +40,7 @@ struct ComposerTextView: NSViewRepresentable {
         self.dismissSuggestions = dismissSuggestions
         self.format = format
         self.send = send
+        self.onEscape = onEscape
     }
 
     func makeCoordinator() -> Coordinator {
@@ -128,6 +131,7 @@ struct ComposerTextView: NSViewRepresentable {
             textView.dismissSuggestions = parent.dismissSuggestions
             textView.format = parent.format
             textView.send = parent.send
+            textView.onEscape = parent.onEscape
             textView.setAccessibilityLabel(parent.accessibilityLabel)
         }
 
@@ -244,6 +248,7 @@ fileprivate final class ComposerNSTextView: NSTextView {
     var dismissSuggestions: (() -> Void)?
     var format: ((ComposerFormatting) -> Void)?
     var send: (() -> Void)?
+    var onEscape: (() -> Void)?
 
     override func paste(_ sender: Any?) {
         guard let pasteAttachments else {
@@ -296,8 +301,12 @@ fileprivate final class ComposerNSTextView: NSTextView {
             }
         case 48 where suggestionsVisible && textNavigationModifiers.isEmpty:
             acceptSuggestion?()
-        case 53 where suggestionsVisible:
-            dismissSuggestions?()
+        case 53 where textNavigationModifiers.isEmpty:
+            if suggestionsVisible {
+                dismissSuggestions?()
+            } else {
+                onEscape?()
+            }
         default:
             super.keyDown(with: event)
         }

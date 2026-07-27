@@ -186,8 +186,9 @@ struct IncrementalSyncScheduler: Sendable {
     private var lastPolledAt: [String: Date] = [:]
     private var backgroundRotationOffset = 0
 
-    init(startedAt: Date) {
+    init(startedAt: Date, lastPolledAt: [String: Date] = [:]) {
         self.startedAt = startedAt
+        self.lastPolledAt = lastPolledAt
     }
 
     mutating func nextDecision(

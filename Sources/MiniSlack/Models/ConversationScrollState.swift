@@ -9,6 +9,7 @@ struct ConversationScrollState: Equatable, Sendable {
     private(set) var hasPositionedInitially = false
     private(set) var isAtBottom = true
 
+    /// Target used the first time a conversation list has content to position.
     mutating func initialTarget(
         lastMessageID: UUID?,
         focusedMessageID: UUID?
@@ -16,6 +17,18 @@ struct ConversationScrollState: Equatable, Sendable {
         guard !hasPositionedInitially else {
             return nil
         }
+        return focusTarget(
+            lastMessageID: lastMessageID,
+            focusedMessageID: focusedMessageID
+        )
+    }
+
+    /// Target used whenever a conversation is (re)focused.
+    /// Always re-anchors to the bottom unless a specific message is focused.
+    mutating func focusTarget(
+        lastMessageID: UUID?,
+        focusedMessageID: UUID?
+    ) -> Target? {
         if let focusedMessageID {
             hasPositionedInitially = true
             isAtBottom = false

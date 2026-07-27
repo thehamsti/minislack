@@ -34,7 +34,22 @@ extension AppStore {
                 return
             }
             let syncStartedAt = Date.now
-            var scheduler = IncrementalSyncScheduler(startedAt: syncStartedAt)
+            let conversationsByID = Dictionary(
+                conversations.map { ($0.id, $0) }
+            ) { first, _ in first }
+            let seededLastPolledAt = lastPolledAtByConversationID.filter {
+                conversationID, _ in
+                guard let conversation = conversationsByID[conversationID] else {
+                    return false
+                }
+                return conversation.unreadCount <= 0
+                    && syncStartedAt.timeIntervalSince(conversation.latestActivity)
+                        >= 3_600
+            }
+            var scheduler = IncrementalSyncScheduler(
+                startedAt: syncStartedAt,
+                lastPolledAt: seededLastPolledAt
+            )
             var acceleratedConversationIDs = Set<String>()
             var acceleratedConversationCount = 0
 
@@ -58,12 +73,15 @@ extension AppStore {
                 let selectedConversationID: String? =
                     if case let .conversation(id) = destination { id } else { nil }
 
+                let decisionTime = Date.now
                 if let decision = scheduler.nextDecision(
-                    now: .now,
+                    now: decisionTime,
                     mode: mode,
                     conversations: candidates,
                     selectedConversationID: selectedConversationID
                 ) {
+                    lastPolledAtByConversationID[decision.conversationID] =
+                        decisionTime
                     if decision.isInitialPoll {
                         acceleratedConversationIDs.insert(
                             decision.conversationID
@@ -96,6 +114,7 @@ extension AppStore {
                         scheduler.recordFailure(
                             for: decision.conversationID
                         )
+                        lastPolledAtByConversationID[decision.conversationID] = nil
                     }
 
                     do {

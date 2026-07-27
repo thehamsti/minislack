@@ -168,6 +168,11 @@ struct WorkspaceAccountTests {
                 activeWorkspaceID: acme.teamID
             )
         )
+        let snapshotRoot = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: snapshotRoot)
+        }
         let store = AppStore(
             conversations: [],
             users: [],
@@ -177,7 +182,8 @@ struct WorkspaceAccountTests {
             slackAPI: SlackAPIClient(urlSession: urlSession),
             credentials: acme,
             notificationService: WorkspaceNotificationService(),
-            dockBadgeService: WorkspaceDockBadgeService()
+            dockBadgeService: WorkspaceDockBadgeService(),
+            snapshotStoreRootURL: snapshotRoot
         )
         let callback = try #require(
             URL(string: "minislack://oauth/slack?code=new-code&state=\(state)")
@@ -207,6 +213,11 @@ struct WorkspaceAccountTests {
                 activeWorkspaceID: acme.teamID
             )
         )
+        let snapshotRoot = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: snapshotRoot)
+        }
         let store = AppStore(
             conversations: [],
             users: [],
@@ -219,7 +230,8 @@ struct WorkspaceAccountTests {
             slackAPI: SlackAPIClient(urlSession: urlSession),
             credentials: acme,
             notificationService: WorkspaceNotificationService(),
-            dockBadgeService: WorkspaceDockBadgeService()
+            dockBadgeService: WorkspaceDockBadgeService(),
+            snapshotStoreRootURL: snapshotRoot
         )
 
         await #expect(throws: (any Error).self) {
@@ -249,6 +261,11 @@ struct WorkspaceAccountTests {
                 activeWorkspaceID: acme.teamID
             )
         )
+        let snapshotRoot = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: snapshotRoot)
+        }
         let store = AppStore(
             conversations: [],
             users: [],
@@ -264,7 +281,8 @@ struct WorkspaceAccountTests {
             ),
             notificationService: WorkspaceNotificationService(),
             dockBadgeService: WorkspaceDockBadgeService(),
-            workspaceLoadTimeout: .milliseconds(500)
+            workspaceLoadTimeout: .milliseconds(500),
+            snapshotStoreRootURL: snapshotRoot
         )
 
         await store.restoreSession()

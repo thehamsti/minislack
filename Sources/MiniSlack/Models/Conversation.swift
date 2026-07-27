@@ -1,12 +1,12 @@
 import Foundation
 
-enum ConversationKind: String, Sendable {
+enum ConversationKind: String, Codable, Sendable {
     case channel
     case directMessage
     case groupDirectMessage
 }
 
-struct Conversation: Identifiable, Hashable, Sendable {
+struct Conversation: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var title: String
     let kind: ConversationKind

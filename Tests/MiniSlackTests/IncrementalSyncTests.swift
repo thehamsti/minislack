@@ -72,6 +72,46 @@ struct IncrementalSyncTests {
     }
 
     @Test
+    func seededLastPolledAtSkipsInitialPollUrgency() {
+        var recentlyPolled = IncrementalSyncScheduler(
+            startedAt: startedAt,
+            lastPolledAt: ["C1": startedAt]
+        )
+
+        #expect(
+            recentlyPolled.nextDecision(
+                now: startedAt.addingTimeInterval(60),
+                mode: .conservative,
+                conversations: [conversation("C1")],
+                selectedConversationID: nil
+            ) == nil
+        )
+
+        var stalePoll = IncrementalSyncScheduler(
+            startedAt: startedAt,
+            lastPolledAt: ["C1": startedAt]
+        )
+        let dueDecision = stalePoll.nextDecision(
+            now: startedAt.addingTimeInterval(1_000),
+            mode: .conservative,
+            conversations: [conversation("C1")],
+            selectedConversationID: nil
+        )
+        #expect(dueDecision?.conversationID == "C1")
+        #expect(dueDecision?.isInitialPoll == false)
+
+        var unseeded = IncrementalSyncScheduler(startedAt: startedAt)
+        #expect(
+            unseeded.nextDecision(
+                now: startedAt.addingTimeInterval(60),
+                mode: .conservative,
+                conversations: [conversation("C1")],
+                selectedConversationID: nil
+            )?.isInitialPoll == true
+        )
+    }
+
+    @Test
     func initialPollingPrioritizesSelectedThenUnreadConversations() {
         var scheduler = IncrementalSyncScheduler(startedAt: startedAt)
         let conversations = [

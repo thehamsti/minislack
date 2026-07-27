@@ -1,6 +1,6 @@
 import Foundation
 
-struct WorkspaceUser: Identifiable, Hashable, Sendable {
+struct WorkspaceUser: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let displayName: String
     let profileTitle: String?

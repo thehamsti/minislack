@@ -69,7 +69,11 @@ struct ThreadPane: View {
                     }
                 }
 
-                ThreadComposer(store: store, identifier: identifier)
+                ThreadComposer(
+                    store: store,
+                    windowState: windowState,
+                    identifier: identifier
+                )
             }
             .background(Color(nsColor: .textBackgroundColor))
             .task(id: identifier) {
@@ -111,7 +115,7 @@ struct ThreadPane: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("Close thread")
+            .help("Close thread (Esc)")
         }
         .padding(.horizontal, 12)
         .frame(height: 46)
@@ -124,6 +128,7 @@ struct ThreadPane: View {
 
 private struct ThreadComposer: View {
     let store: AppStore
+    let windowState: WindowState
     let identifier: ThreadIdentifier
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var editorHeight: CGFloat = 24
@@ -160,7 +165,8 @@ private struct ThreadComposer: View {
                     acceptSuggestion: {},
                     dismissSuggestions: {},
                     format: applyFormatting,
-                    send: send
+                    send: send,
+                    onEscape: windowState.dismissThread
                 )
                 .frame(height: editorHeight)
 

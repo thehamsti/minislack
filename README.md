@@ -41,8 +41,10 @@ windows.
 | Choose a composer tag | `↑` / `↓`, then `Return` or `Tab` |
 | Dismiss composer tags | `Escape` |
 
-Vim and unmodified arrow-key navigation pause automatically while the composer
-or quick-switcher search field is active, so typing remains unaffected.
+`Escape` also works from the composer: it dismisses tag suggestions first, then
+closes an open thread, then returns to Unreads. Vim and unmodified arrow-key
+navigation pause automatically while the composer or quick-switcher search field
+is active, so typing remains unaffected.
 In the composer, type `@` to tag a person or `#` to link a channel. Selected
 results keep their readable names in the draft and send Slack's stable IDs.
 
@@ -55,7 +57,17 @@ Use the Codex `Run` action or:
 ```
 
 The script builds the Swift package, stages `dist/MiniSlack.app`, stops an older
-instance, and launches the fresh app bundle.
+instance, and launches the fresh app bundle. Development runs use the debug
+configuration, so rebuilds are incremental and fast; pass `--release` for an
+optimized build or `--lldb` to debug.
+
+The app is signed with a stable self-signed "MiniSlack Local Development"
+certificate, created in your login keychain automatically on first run. This
+keeps macOS Keychain trusting the stored Slack credentials across rebuilds —
+with ad-hoc signing, every rebuild changes the app's identity and macOS asks
+for the keychain password once per stored item on every launch. After the first
+signed launch, choose **Always Allow** on each remaining prompt once. Set
+`MINISLACK_CODESIGN_IDENTITY` to use a different signing identity.
 
 ## Connect a Slack app
 
@@ -98,7 +110,10 @@ The test script uses a temporary SwiftPM build path so macOS File Provider
 metadata from the Documents folder cannot interfere with test-bundle signing.
 
 The live connection loads workspace users, channels, private channels, DMs,
-unread metadata, and recent message history on demand. Background work is
+unread metadata, and recent message history on demand. A workspace snapshot is
+cached per workspace, so launch renders from the cache instantly and refreshes
+in the background; presence, group-DM, and incremental-sync refetches are gated
+on cache freshness. Background work is
 rate-aware, histories and search indexes are bounded in memory, and durable
 history/search state is stored per workspace. See
 [`CAPABILITY_ROADMAP.md`](./CAPABILITY_ROADMAP.md) for the capability-parity plan,

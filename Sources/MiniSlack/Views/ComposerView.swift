@@ -5,6 +5,7 @@ import SwiftUI
 struct ComposerView: View {
     let store: AppStore
     let conversation: Conversation
+    var onEscape: (() -> Void)? = nil
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var editorHeight: CGFloat = 24
     @State private var selectedSuggestionIndex = 0
@@ -230,7 +231,8 @@ struct ComposerView: View {
                     dismissedQuery = query
                 },
                 format: applyFormatting,
-                send: send
+                send: send,
+                onEscape: onEscape
             )
             .frame(height: editorHeight)
         }

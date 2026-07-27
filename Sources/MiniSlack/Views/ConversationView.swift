@@ -93,7 +93,11 @@ struct ConversationView: View {
                 }
             )
             .id(conversation.id)
-            ComposerView(store: store, conversation: conversation)
+            ComposerView(
+                store: store,
+                conversation: conversation,
+                onEscape: handleEscape
+            )
         }
     }
 
@@ -108,6 +112,18 @@ struct ConversationView: View {
         isFindFieldFocused = false
         isFindPresented = false
         findState.reset()
+    }
+
+    private func handleEscape() {
+        if isFindPresented {
+            dismissFind()
+            return
+        }
+        if windowState.selectedThread != nil {
+            windowState.dismissThread()
+            return
+        }
+        store.showUnreadInbox()
     }
 }
 
@@ -213,7 +229,7 @@ private struct ConversationHeader: View {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                .help("Back to unreads (⌘⇧U)")
+                .help("Back to unreads (Esc)")
             }
 
             if conversation.isDirectMessage {
@@ -421,19 +437,34 @@ private struct MessageList: View {
                     )
                 }
                 .onAppear {
-                    positionInitially(proxy: proxy)
+                    scrollOnConversationFocus(proxy: proxy)
+                }
+                .onDisappear {
+                    if store.workspaceSearchFocus?.conversationID == conversation.id {
+                        store.workspaceSearchFocus = nil
+                    }
+                }
+                .onChange(of: conversation.id) {
+                    scrollOnConversationFocus(proxy: proxy)
                 }
                 .onChange(of: historyState.hasLoadedInitial) {
-                    positionInitially(proxy: proxy)
+                    if !scrollState.hasPositionedInitially {
+                        scrollOnConversationFocus(proxy: proxy)
+                    } else {
+                        followLatestIfNeeded(proxy: proxy)
+                    }
                 }
                 .onChange(of: conversation.messages.last?.id) {
                     if !scrollState.hasPositionedInitially {
-                        positionInitially(proxy: proxy)
-                    } else if scrollState.shouldFollowLatest(
-                        isSearching: findState.isSearching
-                    ) {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                        scrollOnConversationFocus(proxy: proxy)
+                    } else {
+                        followLatestIfNeeded(proxy: proxy)
                     }
+                }
+                .onChange(of: conversation.messages.count) {
+                    // Older history prepends change the count without changing the
+                    // latest message id; re-anchor so focus stays on the bottom.
+                    followLatestIfNeeded(proxy: proxy)
                 }
                 .onChange(of: findState.selectedMessageID) {
                     if let selectedMessageID = findState.selectedMessageID {
@@ -441,30 +472,43 @@ private struct MessageList: View {
                     }
                 }
                 .onChange(of: focusedMessageID) {
-                    if let focusedMessageID {
-                        scrollState.updateBottomVisibility(false)
-                        proxy.scrollTo(focusedMessageID, anchor: .center)
+                    if focusedMessageID != nil {
+                        scrollOnConversationFocus(proxy: proxy)
                     }
                 }
             }
         }
     }
 
-    private func positionInitially(proxy: ScrollViewProxy) {
+    private func scrollOnConversationFocus(proxy: ScrollViewProxy) {
         Task { @MainActor in
             await Task.yield()
-            switch scrollState.initialTarget(
-                lastMessageID: conversation.messages.last?.id,
-                focusedMessageID: focusedMessageID
-            ) {
-            case let .message(messageID):
-                proxy.scrollTo(messageID, anchor: .center)
-            case .bottom:
-                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-            case nil:
-                break
-            }
+            applyFocusScroll(proxy: proxy)
+            // LazyVStack often needs a second layout pass before scrollTo sticks.
+            await Task.yield()
+            applyFocusScroll(proxy: proxy)
         }
+    }
+
+    private func applyFocusScroll(proxy: ScrollViewProxy) {
+        switch scrollState.focusTarget(
+            lastMessageID: conversation.messages.last?.id,
+            focusedMessageID: focusedMessageID
+        ) {
+        case let .message(messageID):
+            proxy.scrollTo(messageID, anchor: .center)
+        case .bottom:
+            proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+        case nil:
+            break
+        }
+    }
+
+    private func followLatestIfNeeded(proxy: ScrollViewProxy) {
+        guard scrollState.shouldFollowLatest(isSearching: findState.isSearching) else {
+            return
+        }
+        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
     }
 }
 
