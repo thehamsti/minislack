@@ -63,4 +63,23 @@ struct SlackRenderingRegressionTests {
 
         #expect(rendered == "@channel @everyone")
     }
+
+    @Test
+    func parsesLinearStyleMrkdwnLabelsWithoutLeavingAsterisks() {
+        let runs = SlackMrkdwn.runs(
+            in: "*State* Backlog *Labels* Improvement *Project* Internal-admin dashboard",
+            context: .empty,
+            messageEmoji: [:]
+        )
+
+        #expect(
+            runs.map(\.displayText).joined()
+                == "State Backlog Labels Improvement Project Internal-admin dashboard"
+        )
+        #expect(
+            runs.filter(\.style.isBold).map(\.displayText)
+                == ["State", "Labels", "Project"]
+        )
+        #expect(runs.contains { $0.displayText == " Backlog " && !$0.style.isBold })
+    }
 }

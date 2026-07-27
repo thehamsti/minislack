@@ -7,7 +7,10 @@ struct MessageMediaSource: Codable, Hashable, Sendable {
 
 struct MessageFormattedText: Codable, Hashable, Sendable {
     let raw: String
+    /// Plain text with entities resolved and mrkdwn markers stripped.
     let display: String
+    /// Styled runs for rendering (bold/italic/links/etc.).
+    let runs: [MessageRichText.Run]
 
     init(
         raw: String,
@@ -15,16 +18,56 @@ struct MessageFormattedText: Codable, Hashable, Sendable {
         messageEmoji: [String: String]
     ) {
         self.raw = raw
-        display = SlackEmoji.replacingUnicodeShortcodes(
-            in: SlackMessageFormatting.render(in: raw, context: context),
+        let parsed = SlackMrkdwn.runs(
+            in: raw,
+            context: context,
             messageEmoji: messageEmoji
         )
+        runs = parsed
+        display = parsed.map(\.displayText).joined()
     }
 
     /// Already-rendered text (e.g. migrating plain-string footers from cache).
-    init(raw: String, display: String) {
+    init(raw: String, display: String, runs: [MessageRichText.Run]? = nil) {
         self.raw = raw
         self.display = display
+        if let runs {
+            self.runs = runs
+        } else {
+            // Best-effort: re-parse raw so cached asterisks still become styles.
+            self.runs = SlackMrkdwn.runs(
+                in: raw,
+                context: .empty,
+                messageEmoji: [:]
+            )
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case raw
+        case display
+        case runs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        raw = try container.decode(String.self, forKey: .raw)
+        display = try container.decode(String.self, forKey: .display)
+        if let decodedRuns = try container.decodeIfPresent(
+            [MessageRichText.Run].self,
+            forKey: .runs
+        ) {
+            runs = decodedRuns
+        } else {
+            runs = SlackMrkdwn.runs(in: raw, context: .empty, messageEmoji: [:])
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(raw, forKey: .raw)
+        try container.encode(display, forKey: .display)
+        try container.encode(runs, forKey: .runs)
     }
 
     func resolving(

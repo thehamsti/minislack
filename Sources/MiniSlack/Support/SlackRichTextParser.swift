@@ -188,67 +188,7 @@ enum SlackRichTextParser {
         context: SlackMessageFormatting.Context,
         messageEmoji: [String: String]
     ) -> [MessageRichText.Run] {
-        var runs: [MessageRichText.Run] = []
-        var cursor = text.startIndex
-
-        while let open = text[cursor...].firstIndex(of: "<"),
-              let close = text[open...].firstIndex(of: ">")
-        {
-            if cursor < open {
-                runs.append(
-                    textRun(
-                        String(text[cursor ..< open]),
-                        context: context,
-                        messageEmoji: messageEmoji
-                    )
-                )
-            }
-
-            let tokenStart = text.index(after: open)
-            let token = String(text[tokenStart ..< close])
-            let parts = token.split(
-                separator: "|",
-                maxSplits: 1,
-                omittingEmptySubsequences: false
-            )
-            if let target = parts.first.map(String.init),
-               let url = URL(string: target),
-               url.scheme != nil
-            {
-                let label = parts.count == 2 && !parts[1].isEmpty
-                    ? String(parts[1])
-                    : target
-                runs.append(
-                    MessageRichText.Run(
-                        content: .link(
-                            url: url.absoluteString,
-                            label: SlackMessageFormatting.render(in: label, context: context)
-                        ),
-                        style: .init()
-                    )
-                )
-            } else {
-                runs.append(
-                    textRun(
-                        String(text[open ... close]),
-                        context: context,
-                        messageEmoji: messageEmoji
-                    )
-                )
-            }
-            cursor = text.index(after: close)
-        }
-
-        if cursor < text.endIndex {
-            runs.append(
-                textRun(
-                    String(text[cursor...]),
-                    context: context,
-                    messageEmoji: messageEmoji
-                )
-            )
-        }
-        return runs
+        SlackMrkdwn.runs(in: text, context: context, messageEmoji: messageEmoji)
     }
 
     private static func textRun(

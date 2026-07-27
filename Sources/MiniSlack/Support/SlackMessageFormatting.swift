@@ -137,7 +137,7 @@ enum SlackMessageFormatting {
         value.hasPrefix("#") ? value : "#\(value)"
     }
 
-    private static func decodeEntities(_ value: String) -> String {
+    static func decodeEntities(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")

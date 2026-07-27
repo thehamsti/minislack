@@ -370,6 +370,138 @@ struct MessageMediaTests {
     }
 
     @Test
+    func parsesLinearStyleMrkdwnBoldLabelsInAttachmentText() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "John Cummings created an issue in the internal-admin dashboard project",
+          "attachments": [
+            {
+              "color": "#5E6AD2",
+              "text": "*State* Backlog *Labels* Improvement *Project* Internal-admin dashboard *Product* | <!date^1753632000^{date_short}|July 27, 2026>",
+              "mrkdwn_in": ["text"]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let attachment = try #require(message.attachments.first)
+        let text = try #require(attachment.text)
+
+        #expect(
+            text.display
+                == "State Backlog Labels Improvement Project Internal-admin dashboard "
+                    + "Product | July 27, 2026"
+        )
+        #expect(!text.display.contains("*"))
+
+        let boldLabels = text.runs
+            .filter(\.style.isBold)
+            .map(\.displayText)
+        #expect(boldLabels == ["State", "Labels", "Project", "Product"])
+
+        let attributed = MessageRichTextAttributedString.make(from: text.runs)
+        #expect(
+            Array(attributed.runs).contains {
+                String(attributed[$0.range].characters) == "State"
+                    && $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+            }
+        )
+    }
+
+    @Test
+    func parsesNestedMrkdwnEmphasisAndCodeInAttachmentFields() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "",
+          "attachments": [
+            {
+              "color": "good",
+              "fields": [
+                {
+                  "title": "Notes",
+                  "value": "*_ship it_* with `main` and ~old plan~",
+                  "short": false
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let field = try #require(message.attachments.first?.fields.first)
+
+        #expect(field.value.display == "ship it with main and old plan")
+        #expect(
+            field.value.runs.contains {
+                $0.displayText == "ship it" && $0.style.isBold && $0.style.isItalic
+            }
+        )
+        #expect(
+            field.value.runs.contains {
+                $0.displayText == "main" && $0.style.isCode
+            }
+        )
+        #expect(
+            field.value.runs.contains {
+                $0.displayText == "old plan" && $0.style.isStruck
+            }
+        )
+    }
+
+    @Test
+    func parsesMrkdwnBoldInsideMessageContextBlocks() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "Status update",
+          "blocks": [
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*State* Backlog · <https://linear.app/issue/ABC|Open issue>"
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let context = try #require(message.context)
+
+        #expect(context.plainText == "State Backlog · Open issue")
+        guard case let .section(runs) = context.blocks[0] else {
+            Issue.record("Expected a context section")
+            return
+        }
+        #expect(
+            runs.contains {
+                $0.displayText == "State" && $0.style.isBold
+            }
+        )
+        #expect(
+            runs.contains {
+                $0.content == .link(
+                    url: "https://linear.app/issue/ABC",
+                    label: "Open issue"
+                )
+            }
+        )
+    }
+
+    @Test
     func mediaMetadataSurvivesTheHistoryCacheCodableBoundary() throws {
         let message = Message(
             author: "Build Bot",

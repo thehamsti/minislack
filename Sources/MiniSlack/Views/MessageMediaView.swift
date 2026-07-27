@@ -66,7 +66,7 @@ private struct MessageAttachmentCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let pretext = attachment.pretext {
                     MediaEmojiText(
-                        text: pretext.display,
+                        text: pretext,
                         customEmojiURLs: customEmojiURLs
                     )
                     .foregroundStyle(.secondary)
@@ -92,7 +92,7 @@ private struct MessageAttachmentCard: View {
 
                 if let text = attachment.text {
                     MediaEmojiText(
-                        text: text.display,
+                        text: text,
                         customEmojiURLs: customEmojiURLs
                     )
                     .font(.callout)
@@ -105,7 +105,7 @@ private struct MessageAttachmentCard: View {
                                 .font(.caption.weight(.semibold))
                         }
                         MediaEmojiText(
-                            text: field.value.display,
+                            text: field.value,
                             customEmojiURLs: customEmojiURLs
                         )
                         .font(.caption)
@@ -179,10 +179,12 @@ private struct MessageAttachmentCard: View {
             }
 
             if let footer = attachment.footer {
-                // Prefer plain Text so footers never depend on emoji view layout.
-                Text(footer.display)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                MediaEmojiText(
+                    text: footer,
+                    customEmojiURLs: customEmojiURLs
+                )
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if attachment.footer != nil, attachment.timestamp != nil {
@@ -674,14 +676,18 @@ private struct MessageMediaActions: View {
 }
 
 private struct MediaEmojiText: View {
-    let text: String
+    let text: MessageFormattedText
     let customEmojiURLs: [String: URL]
 
     var body: some View {
-        let customEmoji = Set(SlackEmoji.shortcodeNames(in: text)).compactMap { name in
+        let attributedString = MessageRichTextAttributedString.make(from: text.runs)
+        let customEmoji = Set(
+            SlackEmoji.shortcodeNames(in: String(attributedString.characters))
+        )
+        .compactMap { name in
             customEmojiURLs[name].map { RemoteEmoji(shortcode: name, url: $0) }
         }
-        EmojiText(verbatim: text, emojis: customEmoji)
+        EmojiText(attributedString, emojis: customEmoji)
     }
 }
 
