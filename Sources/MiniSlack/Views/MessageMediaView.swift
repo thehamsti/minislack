@@ -44,7 +44,28 @@ private struct MessageAttachmentCard: View {
     let attachment: MessageAttachment
     let customEmojiURLs: [String: URL]
 
+    /// Prefer the unfurl target, then author/service URLs when present.
+    private var primaryDestination: URL? {
+        attachment.titleURL
+            ?? attachment.authorURL
+            ?? attachment.serviceURL
+    }
+
     var body: some View {
+        Group {
+            if let destination = primaryDestination {
+                Link(destination: destination) {
+                    cardContent
+                }
+                .buttonStyle(.plain)
+                .help(destination.absoluteString)
+            } else {
+                cardContent
+            }
+        }
+    }
+
+    private var cardContent: some View {
         HStack(alignment: .top, spacing: 8) {
             RoundedRectangle(cornerRadius: 1)
                 .fill(accentColor)
@@ -136,6 +157,7 @@ private struct MessageAttachmentCard: View {
         .padding(8)
         .frame(maxWidth: 340, alignment: .leading)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityElement(children: .contain)
     }
 
