@@ -30,6 +30,7 @@ struct SlackAttachmentDTO: Decodable {
     let footer: String?
     let footerIcon: String?
     let timestamp: Double?
+    let blocks: [SlackRichTextNode]?
 
     enum CodingKeys: String, CodingKey {
         case fallback
@@ -49,6 +50,7 @@ struct SlackAttachmentDTO: Decodable {
         case footer
         case footerIcon = "footer_icon"
         case timestamp = "ts"
+        case blocks
     }
 
     init(from decoder: Decoder) throws {
@@ -67,17 +69,42 @@ struct SlackAttachmentDTO: Decodable {
         fields = try container.decodeIfPresent([FieldDTO].self, forKey: .fields)
         imageURL = try container.decodeIfPresent(String.self, forKey: .imageURL)
         thumbnailURL = try container.decodeIfPresent(String.self, forKey: .thumbnailURL)
-        footer = try container.decodeIfPresent(String.self, forKey: .footer)
+        // Footer is almost always a string; tolerate odd payloads without failing the
+        // whole attachment (which would drop title/body too).
+        if let stringFooter = try? container.decodeIfPresent(String.self, forKey: .footer) {
+            footer = stringFooter
+        } else if let textObject = try? container.decodeIfPresent(
+            SlackTextObjectDTO.self,
+            forKey: .footer
+        ) {
+            footer = textObject.text
+        } else {
+            footer = nil
+        }
         footerIcon = try container.decodeIfPresent(String.self, forKey: .footerIcon)
         let numericTimestamp = try? container.decode(Double.self, forKey: .timestamp)
         let stringTimestamp = try? container.decode(String.self, forKey: .timestamp)
-        timestamp = numericTimestamp ?? stringTimestamp.flatMap(Double.init)
+        let intTimestamp = try? container.decode(Int.self, forKey: .timestamp)
+        timestamp = numericTimestamp
+            ?? stringTimestamp.flatMap(Double.init)
+            ?? intTimestamp.map(Double.init)
+        // Block Kit inside attachments is best-effort — never fail the attachment.
+        blocks = (try? container.decodeIfPresent(
+            [SlackRichTextNode].self,
+            forKey: .blocks
+        )) ?? nil
     }
 
     func attachment(
         context: SlackMessageFormatting.Context,
         messageEmoji: [String: String]
     ) -> MessageAttachment? {
+        let contextFooter = Self.contextFooter(from: blocks)
+        let resolvedFooter = footer ?? contextFooter.text
+        let resolvedFooterIcon = footerIcon ?? contextFooter.iconURL
+        let resolvedTitle = Self.resolvedTitle(title)
+        let resolvedTitleURL = titleLink.flatMap(URL.init(string:))
+            ?? resolvedTitle.linkURL
         let attachment = MessageAttachment(
             fallback: fallback,
             color: color,
@@ -93,8 +120,8 @@ struct SlackAttachmentDTO: Decodable {
             authorIconURL: authorIcon.flatMap(URL.init(string:)),
             serviceName: serviceName,
             serviceURL: serviceURL.flatMap(URL.init(string:)),
-            title: title,
-            titleURL: titleLink.flatMap(URL.init(string:)),
+            title: resolvedTitle.display,
+            titleURL: resolvedTitleURL,
             text: text.map {
                 MessageFormattedText(
                     raw: $0,
@@ -121,11 +148,80 @@ struct SlackAttachmentDTO: Decodable {
             thumbnailSource: thumbnailURL
                 .flatMap(URL.init(string:))
                 .map { MessageMediaSource(url: $0, requiresSlackAuthorization: false) },
-            footer: footer,
-            footerIconURL: footerIcon.flatMap(URL.init(string:)),
+            footer: resolvedFooter.map {
+                MessageFormattedText(
+                    raw: $0,
+                    context: context,
+                    messageEmoji: messageEmoji
+                )
+            },
+            footerIconURL: resolvedFooterIcon.flatMap(URL.init(string:)),
             timestamp: timestamp.map(Date.init(timeIntervalSince1970:))
         )
         return attachment.isEmpty ? nil : attachment
+    }
+
+    /// Pull footer text/icon from Block Kit `context` blocks when classic fields are absent.
+    private static func contextFooter(
+        from blocks: [SlackRichTextNode]?
+    ) -> (text: String?, iconURL: String?) {
+        guard let blocks else {
+            return (nil, nil)
+        }
+        var texts: [String] = []
+        var iconURL: String?
+        for block in blocks where block.type == "context" {
+            for element in block.elements ?? [] {
+                switch element.type {
+                case "image":
+                    if iconURL == nil {
+                        iconURL = element.imageURL
+                    }
+                case "mrkdwn", "plain_text":
+                    if let text = element.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !text.isEmpty
+                    {
+                        texts.append(text)
+                    }
+                default:
+                    continue
+                }
+            }
+        }
+        let text = texts.isEmpty ? nil : texts.joined(separator: "  ")
+        return (text, iconURL)
+    }
+
+    /// Titles often arrive as Slack mrkdwn links: `<url|label>`.
+    private static func resolvedTitle(
+        _ title: String?
+    ) -> (display: String?, linkURL: URL?) {
+        guard let title, !title.isEmpty else {
+            return (nil, nil)
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("<"),
+              trimmed.hasSuffix(">"),
+              !trimmed.hasPrefix("<@"),
+              !trimmed.hasPrefix("<#"),
+              !trimmed.hasPrefix("<!")
+        else {
+            return (title, nil)
+        }
+        let inner = String(trimmed.dropFirst().dropLast())
+        let parts = inner.split(
+            separator: "|",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard let target = parts.first.map(String.init),
+              let url = URL(string: target),
+              url.scheme != nil
+        else {
+            return (title, nil)
+        }
+        let label = parts.count == 2 ? String(parts[1]) : target
+        return (label.isEmpty ? target : label, url)
     }
 }
 

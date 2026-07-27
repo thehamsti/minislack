@@ -114,6 +114,8 @@ struct MessageMediaTests {
         #expect(attachment.text?.display == "@Maya Chen shipped #shipping 🚀")
         #expect(attachment.fields.first?.value.display == "2m 14s")
         #expect(attachment.thumbnailSource?.requiresSlackAuthorization == false)
+        #expect(attachment.footer?.display == "production")
+        #expect(attachment.hasFooter)
         #expect(
             attachment.timestamp == Date(timeIntervalSince1970: 1_700_000_199)
         )
@@ -133,6 +135,165 @@ struct MessageMediaTests {
         #expect(message.images[0].source?.requiresSlackAuthorization == false)
         #expect(message.images[1].source?.requiresSlackAuthorization == true)
         #expect(message.compactPreviewText == "Build 42 passed")
+    }
+
+    @Test
+    func decodesClassicFooterIconAndMrkdwnFooterLinks() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "",
+          "attachments": [
+            {
+              "color": "danger",
+              "title": "<https://www.ncbi.nlm.nih.gov/pubmed/123|📄 New Research Publication>",
+              "title_link": "https://www.ncbi.nlm.nih.gov/pubmed/123",
+              "text": "https://www.ncbi.nlm.nih.gov/pubmed/123",
+              "footer": "<https://example.com/research|Research Publication>",
+              "footer_icon": "https://images.example.com/research-icon.png",
+              "ts": "1700000117"
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let attachment = try #require(message.attachments.first)
+
+        #expect(attachment.title == "📄 New Research Publication")
+        #expect(
+            attachment.titleURL
+                == URL(string: "https://www.ncbi.nlm.nih.gov/pubmed/123")
+        )
+        #expect(attachment.footer?.display == "Research Publication")
+        #expect(
+            attachment.footerIconURL
+                == URL(string: "https://images.example.com/research-icon.png")
+        )
+        #expect(attachment.hasFooter)
+        #expect(
+            attachment.timestamp == Date(timeIntervalSince1970: 1_700_000_117)
+        )
+    }
+
+    @Test
+    func derivesFooterFromMessageLevelContextBlocksOntoAttachment() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "",
+          "attachments": [
+            {
+              "color": "#b71c1c",
+              "title": "📄 New Research Publication",
+              "title_link": "https://www.ncbi.nlm.nih.gov/pubmed/123",
+              "text": "https://www.ncbi.nlm.nih.gov/pubmed/123"
+            }
+          ],
+          "blocks": [
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "image",
+                  "image_url": "https://images.example.com/research-icon.png",
+                  "alt_text": "Research"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "Research Publication"
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let attachment = try #require(message.attachments.first)
+        #expect(attachment.hasFooter)
+        #expect(attachment.footer?.display == "Research Publication")
+        #expect(
+            attachment.footerIconURL
+                == URL(string: "https://images.example.com/research-icon.png")
+        )
+    }
+
+    @Test
+    func derivesFooterFromAttachmentContextBlocksWhenClassicFieldsMissing() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "",
+          "attachments": [
+            {
+              "color": "#b71c1c",
+              "title": "📄 New Research Publication",
+              "title_link": "https://www.ncbi.nlm.nih.gov/pubmed/123",
+              "blocks": [
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "image",
+                      "image_url": "https://images.example.com/research-icon.png",
+                      "alt_text": "Research"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "Research Publication  |  <!date^1700000117^{date_short_pretty} {time}|Today at 12:17 PM>"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+        let attachment = try #require(message.attachments.first)
+
+        #expect(attachment.title == "📄 New Research Publication")
+        #expect(attachment.hasFooter)
+        #expect(
+            attachment.footerIconURL
+                == URL(string: "https://images.example.com/research-icon.png")
+        )
+        #expect(attachment.footer?.display.contains("Research Publication") == true)
+        #expect(attachment.footer?.display.contains("Today at 12:17 PM") == true)
+    }
+
+    @Test
+    func legacyPlainStringFootersStillDecodeFromCache() throws {
+        let json = """
+        {
+          "fallback": "Build 42",
+          "color": "good",
+          "title": "Build 42 passed",
+          "fields": [],
+          "footer": "<https://example.com/repo|acme/repo>",
+          "footerIconURL": "https://images.example.com/icon.png",
+          "timestamp": 100
+        }
+        """
+        let attachment = try JSONDecoder().decode(
+            MessageAttachment.self,
+            from: Data(json.utf8)
+        )
+        #expect(attachment.footer?.raw == "<https://example.com/repo|acme/repo>")
+        #expect(attachment.footer?.display == "acme/repo")
+        #expect(
+            attachment.footerIconURL
+                == URL(string: "https://images.example.com/icon.png")
+        )
+        #expect(attachment.hasFooter)
     }
 
     @Test
@@ -333,3 +494,72 @@ struct MessageMediaTests {
         #expect(!firstFileKey.contains(firstToken))
     }
 }
+
+    @Test
+    func decodesRealCachedGitHubAttachmentFooterShape() throws {
+        // Mirrors payloads currently in the local history cache (plain-string footer).
+        let json = """
+        {
+          "fallback": "[k16-solutions/e2-lambda] Pull request merged",
+          "color": "6f42c1",
+          "title": "<https://github.com/k16-solutions/e2-lambda/pull/8916|#8916 fix>",
+          "fields": [],
+          "footer": "<https://github.com/k16-solutions/e2-lambda|k16-solutions/e2-lambda>",
+          "footerIconURL": "https://slack.github.com/static/img/favicon-neutral.png",
+          "timestamp": 806432211
+        }
+        """
+        let attachment = try JSONDecoder().decode(
+            MessageAttachment.self,
+            from: Data(json.utf8)
+        )
+        #expect(attachment.hasFooter)
+        #expect(attachment.footer?.display == "k16-solutions/e2-lambda")
+        #expect(attachment.footerIconURL != nil)
+        #expect(attachment.timestamp != nil)
+    }
+
+    @Test
+    func fullCachedMessageWithAttachmentsKeepsFooter() throws {
+        let json = """
+        {
+          "id": "DB95638E-A2BB-4404-8B06-8286143C15C2",
+          "author": "GitHub",
+          "authorUserID": "U0442RWRAGZ",
+          "body": "",
+          "timestamp": 806433520.194659,
+          "authorAvatarURL": "https://avatars.slack-edge.com/x.png",
+          "remoteID": "1784740720.194659",
+          "isCurrentUser": false,
+          "displayBody": "",
+          "integration": {
+            "kind": "app",
+            "botID": "B0439L5P57H",
+            "appID": "A01BP7R4KNY",
+            "name": "Slack app"
+          },
+          "attachments": [
+            {
+              "timestamp": 806432211,
+              "fallback": "PR merged",
+              "title": "title",
+              "footerIconURL": "https://slack.github.com/static/img/favicon-neutral.png",
+              "footer": "<https://github.com/k16-solutions/e2-lambda|k16-solutions/e2-lambda>",
+              "color": "6f42c1",
+              "fields": []
+            }
+          ],
+          "files": [],
+          "images": [],
+          "reactions": [],
+          "emojiUnicode": {},
+          "isDeleted": false,
+          "deliveryState": { "received": {} },
+          "isPinned": false
+        }
+        """
+        let message = try JSONDecoder().decode(Message.self, from: Data(json.utf8))
+        #expect(message.attachments.count == 1)
+        #expect(message.attachments[0].hasFooter)
+        #expect(message.attachments[0].footer?.display == "k16-solutions/e2-lambda")
+    }

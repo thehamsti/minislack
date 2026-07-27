@@ -21,6 +21,12 @@ struct MessageFormattedText: Codable, Hashable, Sendable {
         )
     }
 
+    /// Already-rendered text (e.g. migrating plain-string footers from cache).
+    init(raw: String, display: String) {
+        self.raw = raw
+        self.display = display
+    }
+
     func resolving(
         context: SlackMessageFormatting.Context,
         messageEmoji: [String: String]
@@ -29,7 +35,7 @@ struct MessageFormattedText: Codable, Hashable, Sendable {
     }
 }
 
-struct MessageAttachment: Codable, Hashable, Sendable {
+struct MessageAttachment: Hashable, Sendable {
     struct Field: Codable, Hashable, Sendable {
         let title: String?
         let value: MessageFormattedText
@@ -61,9 +67,47 @@ struct MessageAttachment: Codable, Hashable, Sendable {
     let fields: [Field]
     let imageSource: MessageMediaSource?
     let thumbnailSource: MessageMediaSource?
-    let footer: String?
+    let footer: MessageFormattedText?
     let footerIconURL: URL?
     let timestamp: Date?
+
+    init(
+        fallback: String? = nil,
+        color: String? = nil,
+        pretext: MessageFormattedText? = nil,
+        authorName: String? = nil,
+        authorURL: URL? = nil,
+        authorIconURL: URL? = nil,
+        serviceName: String? = nil,
+        serviceURL: URL? = nil,
+        title: String? = nil,
+        titleURL: URL? = nil,
+        text: MessageFormattedText? = nil,
+        fields: [Field] = [],
+        imageSource: MessageMediaSource? = nil,
+        thumbnailSource: MessageMediaSource? = nil,
+        footer: MessageFormattedText? = nil,
+        footerIconURL: URL? = nil,
+        timestamp: Date? = nil
+    ) {
+        self.fallback = fallback
+        self.color = color
+        self.pretext = pretext
+        self.authorName = authorName
+        self.authorURL = authorURL
+        self.authorIconURL = authorIconURL
+        self.serviceName = serviceName
+        self.serviceURL = serviceURL
+        self.title = title
+        self.titleURL = titleURL
+        self.text = text
+        self.fields = fields
+        self.imageSource = imageSource
+        self.thumbnailSource = thumbnailSource
+        self.footer = footer
+        self.footerIconURL = footerIconURL
+        self.timestamp = timestamp
+    }
 
     var isEmpty: Bool {
         pretext == nil
@@ -75,6 +119,8 @@ struct MessageAttachment: Codable, Hashable, Sendable {
             && imageSource == nil
             && thumbnailSource == nil
             && footer == nil
+            && footerIconURL == nil
+            && timestamp == nil
     }
 
     var summary: String? {
@@ -82,6 +128,11 @@ struct MessageAttachment: Codable, Hashable, Sendable {
             ?? text?.display
             ?? fallback
             ?? serviceName
+            ?? footer?.display
+    }
+
+    var hasFooter: Bool {
+        footer != nil || footerIconURL != nil || timestamp != nil
     }
 
     func resolving(
@@ -105,10 +156,96 @@ struct MessageAttachment: Codable, Hashable, Sendable {
             },
             imageSource: imageSource,
             thumbnailSource: thumbnailSource,
-            footer: footer,
+            footer: footer?.resolving(context: context, messageEmoji: messageEmoji),
             footerIconURL: footerIconURL,
             timestamp: timestamp
         )
+    }
+}
+
+extension MessageAttachment: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case fallback
+        case color
+        case pretext
+        case authorName
+        case authorURL
+        case authorIconURL
+        case serviceName
+        case serviceURL
+        case title
+        case titleURL
+        case text
+        case fields
+        case imageSource
+        case thumbnailSource
+        case footer
+        case footerIconURL
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fallback = try container.decodeIfPresent(String.self, forKey: .fallback)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        pretext = try container.decodeIfPresent(
+            MessageFormattedText.self,
+            forKey: .pretext
+        )
+        authorName = try container.decodeIfPresent(String.self, forKey: .authorName)
+        authorURL = try container.decodeIfPresent(URL.self, forKey: .authorURL)
+        authorIconURL = try container.decodeIfPresent(URL.self, forKey: .authorIconURL)
+        serviceName = try container.decodeIfPresent(String.self, forKey: .serviceName)
+        serviceURL = try container.decodeIfPresent(URL.self, forKey: .serviceURL)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        titleURL = try container.decodeIfPresent(URL.self, forKey: .titleURL)
+        text = try container.decodeIfPresent(MessageFormattedText.self, forKey: .text)
+        fields = try container.decodeIfPresent([Field].self, forKey: .fields) ?? []
+        imageSource = try container.decodeIfPresent(
+            MessageMediaSource.self,
+            forKey: .imageSource
+        )
+        thumbnailSource = try container.decodeIfPresent(
+            MessageMediaSource.self,
+            forKey: .thumbnailSource
+        )
+        // Cache used to store footer as a plain String; accept both shapes.
+        if let formatted = try? container.decodeIfPresent(
+            MessageFormattedText.self,
+            forKey: .footer
+        ) {
+            footer = formatted
+        } else if let plain = try container.decodeIfPresent(String.self, forKey: .footer) {
+            footer = MessageFormattedText(
+                raw: plain,
+                display: SlackMessageFormatting.render(in: plain, context: .empty)
+            )
+        } else {
+            footer = nil
+        }
+        footerIconURL = try container.decodeIfPresent(URL.self, forKey: .footerIconURL)
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(fallback, forKey: .fallback)
+        try container.encodeIfPresent(color, forKey: .color)
+        try container.encodeIfPresent(pretext, forKey: .pretext)
+        try container.encodeIfPresent(authorName, forKey: .authorName)
+        try container.encodeIfPresent(authorURL, forKey: .authorURL)
+        try container.encodeIfPresent(authorIconURL, forKey: .authorIconURL)
+        try container.encodeIfPresent(serviceName, forKey: .serviceName)
+        try container.encodeIfPresent(serviceURL, forKey: .serviceURL)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(titleURL, forKey: .titleURL)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encode(fields, forKey: .fields)
+        try container.encodeIfPresent(imageSource, forKey: .imageSource)
+        try container.encodeIfPresent(thumbnailSource, forKey: .thumbnailSource)
+        try container.encodeIfPresent(footer, forKey: .footer)
+        try container.encodeIfPresent(footerIconURL, forKey: .footerIconURL)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
     }
 }
 

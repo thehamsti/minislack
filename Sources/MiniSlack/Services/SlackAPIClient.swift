@@ -1178,6 +1178,43 @@ struct SlackMessageDTO: Decodable {
             )
         let threadRootTimestamp = threadTimestamp
             ?? ((replyCount ?? 0) > 0 ? timestamp : nil)
+        var resolvedAttachments = (attachments ?? []).compactMap {
+            $0.attachment(context: context, messageEmoji: emojiUnicode)
+        }
+        // Some apps put the visual "footer" in a top-level context block while the
+        // colored card is a sparse attachment (title + color only).
+        if let contextFooter = Self.messageContextFooter(from: blocks),
+           let index = resolvedAttachments.indices.last
+        {
+            let existing = resolvedAttachments[index]
+            if !existing.hasFooter {
+                resolvedAttachments[index] = MessageAttachment(
+                    fallback: existing.fallback,
+                    color: existing.color,
+                    pretext: existing.pretext,
+                    authorName: existing.authorName,
+                    authorURL: existing.authorURL,
+                    authorIconURL: existing.authorIconURL,
+                    serviceName: existing.serviceName,
+                    serviceURL: existing.serviceURL,
+                    title: existing.title,
+                    titleURL: existing.titleURL,
+                    text: existing.text,
+                    fields: existing.fields,
+                    imageSource: existing.imageSource,
+                    thumbnailSource: existing.thumbnailSource,
+                    footer: contextFooter.text.map {
+                        MessageFormattedText(
+                            raw: $0,
+                            context: context,
+                            messageEmoji: emojiUnicode
+                        )
+                    },
+                    footerIconURL: contextFooter.iconURL.flatMap(URL.init(string:)),
+                    timestamp: existing.timestamp
+                )
+            }
+        }
         return Message(
             id: clientMessageID.flatMap(UUID.init(uuidString:)) ?? UUID(),
             author: authorUser?.displayName ?? resolvedIntegration?.name ?? username ?? "Slack",
@@ -1190,9 +1227,7 @@ struct SlackMessageDTO: Decodable {
             displayBody: displayBody,
             richText: isDeleted ? nil : richText,
             integration: resolvedIntegration,
-            attachments: (attachments ?? []).compactMap {
-                $0.attachment(context: context, messageEmoji: emojiUnicode)
-            },
+            attachments: resolvedAttachments,
             files: (files ?? []).map(\.file),
             images: (blocks ?? []).compactMap(\.messageImage),
             reactions: reactions?.map {
@@ -1244,6 +1279,46 @@ struct SlackMessageDTO: Decodable {
             name: name,
             avatarURL: icons?.avatarURL ?? botProfile?.icons?.avatarURL
         )
+    }
+
+    /// Footer-like content from top-level message `context` blocks.
+    private static func messageContextFooter(
+        from blocks: [SlackRichTextNode]?
+    ) -> (text: String?, iconURL: String?)? {
+        guard let blocks else {
+            return nil
+        }
+        var texts: [String] = []
+        var iconURL: String?
+        var sawContext = false
+        for block in blocks where block.type == "context" {
+            sawContext = true
+            for element in block.elements ?? [] {
+                switch element.type {
+                case "image":
+                    if iconURL == nil {
+                        iconURL = element.imageURL
+                    }
+                case "mrkdwn", "plain_text":
+                    if let text = element.text?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !text.isEmpty
+                    {
+                        texts.append(text)
+                    }
+                default:
+                    continue
+                }
+            }
+        }
+        guard sawContext else {
+            return nil
+        }
+        let text = texts.isEmpty ? nil : texts.joined(separator: "  ")
+        guard text != nil || iconURL != nil else {
+            return nil
+        }
+        return (text, iconURL)
     }
 }
 

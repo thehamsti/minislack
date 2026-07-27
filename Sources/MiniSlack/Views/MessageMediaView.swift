@@ -44,6 +44,7 @@ struct MessageMediaView: View {
 private struct MessageAttachmentCard: View {
     let attachment: MessageAttachment
     let customEmojiURLs: [String: URL]
+    @Environment(\.openURL) private var openURL
 
     /// Prefer the unfurl target, then author/service URLs when present.
     private var primaryDestination: URL? {
@@ -53,27 +54,16 @@ private struct MessageAttachmentCard: View {
     }
 
     var body: some View {
-        Group {
-            if let destination = primaryDestination {
-                Link(destination: destination) {
-                    cardContent
-                }
-                .buttonStyle(.plain)
-                .help(destination.absoluteString)
-            } else {
-                cardContent
-            }
-        }
-    }
-
-    private var cardContent: some View {
+        // Do not wrap the whole card in `Link` — on macOS that clips multi-line
+        // attachment content (fields, images, footers). Keep explicit links on
+        // title/author and open the primary URL on card click instead.
         HStack(alignment: .top, spacing: 8) {
             RoundedRectangle(cornerRadius: 1)
                 .fill(accentColor)
                 .frame(width: 3)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 if let pretext = attachment.pretext {
                     MediaEmojiText(
                         text: pretext.display,
@@ -84,18 +74,8 @@ private struct MessageAttachmentCard: View {
 
                 if attachment.authorName != nil || attachment.serviceName != nil {
                     HStack(spacing: 5) {
-                        if let iconURL = attachment.authorIconURL
-                            ?? attachment.footerIconURL
-                        {
-                            AsyncImage(url: iconURL) { phase in
-                                if case let .success(image) = phase {
-                                    image.resizable().scaledToFill()
-                                } else {
-                                    Image(systemName: "app.dashed")
-                                }
-                            }
-                            .frame(width: 16, height: 16)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                        if let iconURL = attachment.authorIconURL {
+                            attachmentIcon(url: iconURL, size: 16)
                         }
                         linkedText(
                             attachment.authorName ?? attachment.serviceName ?? "",
@@ -149,24 +129,27 @@ private struct MessageAttachmentCard: View {
                     )
                 }
 
-                if let footer = attachment.footer {
-                    HStack(spacing: 4) {
-                        Text(footer)
-                        if let timestamp = attachment.timestamp {
-                            Text("·")
-                            Text(timestamp, style: .relative)
-                        }
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if attachment.hasFooter {
+                    attachmentFooter
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(8)
         .frame(maxWidth: 340, alignment: .leading)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
+        // Card chrome is tappable; nested Links on title/author still win hit-testing.
+        .onTapGesture {
+            guard let primaryDestination else { return }
+            openURL(primaryDestination)
+        }
+        .help(primaryDestination.map(\.absoluteString) ?? "")
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Open attachment") {
+            guard let primaryDestination else { return }
+            openURL(primaryDestination)
+        }
     }
 
     private var accentColor: Color {
@@ -182,6 +165,81 @@ private struct MessageAttachmentCard: View {
         case nil:
             .secondary
         }
+    }
+
+    /// Classic Slack attachment footer: icon · label · timestamp.
+    /// Spec: https://docs.slack.dev/legacy/legacy-messaging/legacy-secondary-message-attachments
+    /// - `footer_icon` only renders when `footer` is present (16×16)
+    /// - `ts` is shown as part of the footer row
+    private var attachmentFooter: some View {
+        HStack(alignment: .center, spacing: 5) {
+            // Slack only draws footer_icon when footer text is present.
+            if attachment.footer != nil, let iconURL = attachment.footerIconURL {
+                attachmentIcon(url: iconURL, size: 16)
+            }
+
+            if let footer = attachment.footer {
+                // Prefer plain Text so footers never depend on emoji view layout.
+                Text(footer.display)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if attachment.footer != nil, attachment.timestamp != nil {
+                Text("·")
+            }
+
+            if let timestamp = attachment.timestamp {
+                Text(Self.footerTimestampText(timestamp))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.top, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(footerAccessibilityLabel)
+    }
+
+    private var footerAccessibilityLabel: String {
+        var parts: [String] = []
+        if let footer = attachment.footer?.display, !footer.isEmpty {
+            parts.append(footer)
+        }
+        if let timestamp = attachment.timestamp {
+            parts.append(Self.footerTimestampText(timestamp))
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    @ViewBuilder
+    private func attachmentIcon(url: URL, size: CGFloat) -> some View {
+        AsyncImage(url: url) { phase in
+            if case let .success(image) = phase {
+                image.resizable().scaledToFill()
+            } else {
+                Image(systemName: "app.dashed")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(2)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size <= 14 ? 2 : 3))
+        .accessibilityHidden(true)
+    }
+
+    /// Slack varies footer time by recency ("Today at 12:17 PM", etc.).
+    private static func footerTimestampText(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDateInToday(date) {
+            return "Today at \(time)"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday at \(time)"
+        }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     @ViewBuilder
