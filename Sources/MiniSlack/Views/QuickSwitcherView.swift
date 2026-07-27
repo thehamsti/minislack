@@ -8,10 +8,14 @@ struct QuickSwitcherView: View {
     var body: some View {
         @Bindable var store = store
         let showsUnreads = store.quickSwitcherShowsUnreads
+        let showsActivity = store.quickSwitcherShowsActivity
+        let showsSaved = store.quickSwitcherShowsSaved
         let users = store.quickSwitcherUsers
         let groupMessages = store.quickSwitcherGroupMessages
         let channels = store.quickSwitcherChannels
         let hasResults = showsUnreads
+            || showsActivity
+            || showsSaved
             || !users.isEmpty
             || !groupMessages.isEmpty
             || !channels.isEmpty
@@ -43,30 +47,79 @@ struct QuickSwitcherView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 2, pinnedViews: .sectionHeaders) {
-                            if showsUnreads {
+                            if showsUnreads || showsActivity || showsSaved {
                                 quickSwitcherSection("Go to") {
-                                    let item = AppStore.QuickSwitcherItem.unreads
-                                    resultButton(item: item) {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "tray.full.fill")
-                                                .foregroundStyle(.orange)
-                                                .frame(width: 24)
+                                    if showsUnreads {
+                                        let item = AppStore.QuickSwitcherItem.unreads
+                                        resultButton(item: item) {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: "tray.full.fill")
+                                                    .foregroundStyle(.orange)
+                                                    .frame(width: 24)
 
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("Unreads")
-                                                    .fontWeight(.semibold)
-                                                Text("\(store.unreadConversations.count) conversations need attention")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Unreads")
+                                                        .fontWeight(.semibold)
+                                                    Text("\(store.unreadConversations.count) conversations need attention")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+
+                                                Spacer()
+                                                if !store.unreadConversations.isEmpty {
+                                                    CountBadge(
+                                                        count: store.unreadConversations.reduce(0) {
+                                                            $0 + $1.unreadCount
+                                                        }
+                                                    )
+                                                }
                                             }
+                                        }
+                                    }
 
-                                            Spacer()
-                                            if !store.unreadConversations.isEmpty {
-                                                CountBadge(
-                                                    count: store.unreadConversations.reduce(0) {
-                                                        $0 + $1.unreadCount
-                                                    }
-                                                )
+                                    if showsActivity {
+                                        let item = AppStore.QuickSwitcherItem.activity
+                                        resultButton(item: item) {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: "bell.fill")
+                                                    .foregroundStyle(.orange)
+                                                    .frame(width: 24)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Activity")
+                                                        .fontWeight(.semibold)
+                                                    Text("Mentions, reactions, and threads")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                Spacer()
+                                                if store.unreadActivityCount > 0 {
+                                                    CountBadge(
+                                                        count: store.unreadActivityCount,
+                                                        emphasized: true
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if showsSaved {
+                                        let item = AppStore.QuickSwitcherItem.saved
+                                        resultButton(item: item) {
+                                            HStack(spacing: 10) {
+                                                Image(systemName: "bookmark.fill")
+                                                    .foregroundStyle(.orange)
+                                                    .frame(width: 24)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Saved messages")
+                                                        .fontWeight(.semibold)
+                                                    Text("Stored locally for this workspace")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                Spacer()
+                                                if !store.savedMessages.isEmpty {
+                                                    CountBadge(count: store.savedMessages.count)
+                                                }
                                             }
                                         }
                                     }

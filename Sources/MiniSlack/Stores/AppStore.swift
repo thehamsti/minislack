@@ -10,6 +10,58 @@ struct ConversationHistoryState: Equatable, Sendable {
     var errorMessage: String?
 }
 
+enum ConversationManagementError: LocalizedError, Equatable {
+    case invalidChannelName
+    case invalidChannelDetails
+    case invalidGroupSize
+    case invalidReplacementGroupSize
+    case invalidGroupMembers
+    case channelNotFound
+    case permissionDenied(String)
+    case reconnectRequired(String)
+    case unsupported(String)
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidChannelName:
+            "Channel names must be 1–80 characters using lowercase letters, numbers, hyphens, or underscores."
+        case .invalidChannelDetails:
+            "Channel topics and descriptions must be 250 characters or fewer."
+        case .invalidGroupSize:
+            "Choose between 2 and 8 people."
+        case .invalidReplacementGroupSize:
+            "Keep between 1 and 8 other people in the conversation."
+        case .invalidGroupMembers:
+            "One or more selected people are no longer available."
+        case .channelNotFound:
+            "That channel is no longer available."
+        case let .permissionDenied(action):
+            "Slack doesn’t allow your account to \(action) here."
+        case let .reconnectRequired(action):
+            "Reconnect Slack so Mini Slack can request permission to \(action)."
+        case let .unsupported(action):
+            "Slack’s public API doesn’t support \(action) for this conversation."
+        case let .unavailable(message):
+            message
+        }
+    }
+}
+
+enum WorkspaceConnectionError: LocalizedError, Equatable {
+    case unavailable
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            "Slack is not configured for this build."
+        case .timedOut:
+            "Slack took too long to load this workspace. Try again."
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppStore {
@@ -25,11 +77,15 @@ final class AppStore {
 
     enum Destination: Hashable {
         case unreadInbox
+        case activity
+        case savedMessages
         case conversation(String)
     }
 
     enum QuickSwitcherItem: Hashable, Identifiable {
         case unreads
+        case activity
+        case saved
         case user(String)
         case channel(String)
 
@@ -37,11 +93,28 @@ final class AppStore {
             switch self {
             case .unreads:
                 "destination-unreads"
+            case .activity:
+                "destination-activity"
+            case .saved:
+                "destination-saved"
             case let .user(id):
                 "user-\(id)"
             case let .channel(id):
                 "channel-\(id)"
             }
+        }
+    }
+
+    struct WorkspaceSession: Equatable, Sendable {
+        let generation: UInt64
+        let teamID: String
+    }
+
+    enum WorkspaceSessionError: LocalizedError, Equatable {
+        case changed
+
+        var errorDescription: String? {
+            "The active Slack workspace changed. Try again."
         }
     }
 
@@ -56,19 +129,58 @@ final class AppStore {
     var quickSwitcherQuery = ""
     var quickSwitcherSelection: QuickSwitcherItem?
     var keyboardConversationID: String?
+    private(set) var publicChannels: [SlackPublicChannel] = []
     private(set) var historyStates: [String: ConversationHistoryState] = [:]
-    private let slackOAuth: SlackOAuthService?
-    private let credentialStore: SlackCredentialStore?
-    private let slackAPI: SlackAPIClient?
-    private var credentials: SlackCredentials?
-    private var messageUsers: [WorkspaceUser]
+    var threadStates: [ThreadIdentifier: ThreadState] = [:]
+    var scheduledMessagesState = ScheduledMessagesState()
+    var attachmentDraftsByConversationID: [String: ComposerAttachmentDraftState] = [:]
+    var activityIndex: ActivityIndex
+    var activityLastViewedAt = Date.distantPast
+    var savedMessages: [SavedMessage] = []
+    var savedMessageStore: SavedMessageStore?
+    var savedMessageRevision = 0
+    var workspaceAccounts: [SlackWorkspaceAccountSummary] = []
+    private var slackOAuth: SlackOAuthService?
+    let credentialStore: (any SlackCredentialStoring)?
+    let slackAPI: SlackAPIClient?
+    var credentials: SlackCredentials?
+    var messageUsers: [WorkspaceUser]
     private var usersByID: [String: WorkspaceUser]
-    private var historyCache: MessageHistoryCache?
+    var workspaceSearchIndex: WorkspaceSearchIndex
+    var workspaceSearchFocus: WorkspaceSearchFocus?
+    var historyCache: MessageHistoryCache?
     private var loadedHistoryPageCounts: [String: Int] = [:]
     private var historyBackfillTask: Task<Void, Never>?
     private var availabilityRefreshTask: Task<Void, Never>?
+    private var workspaceSearchBackfillTask: Task<Void, Never>?
+    var incrementalSyncTask: Task<Void, Never>?
+    var socketModeTask: Task<Void, Never>?
+    var socketModeState: SlackSocketModeState = .notConfigured
+    var incrementalSyncCatchups: [String: IncrementalSyncCatchupState] = [:]
+    var readCursorsByConversationID: [String: MessageHistoryReadCursor]
+    var unreadBaselinedConversationIDs: Set<String>
+    var outgoingMessageOutbox: OutgoingMessageOutbox?
+    var outgoingMessageReplayTask: Task<Void, Never>?
+    var messageMutationQueue: MessageMutationQueue?
+    var messageMutationReplayTask: Task<Void, Never>?
+    var messageMutationsByTarget: [MessageMutationTarget: MessageMutation] = [:]
+    private var workspaceOperationTasks: [UUID: Task<Void, Never>] = [:]
+    private var credentialRefreshTask: Task<SlackCredentials, Error>?
+    private var credentialRefreshSession: WorkspaceSession?
+    private var credentialRefreshID: UUID?
+    private var activeSlackCallbackURL: URL?
+    private var isSlackWebAuthenticationActive = false
+    private(set) var workspaceSessionGeneration: UInt64 = 0
+    private let slackOAuthWebAuthenticator: any SlackOAuthWebAuthenticating
+    var mutedConversationIDs: Set<String> = []
+    let notificationService: any MessageNotificationDelivering
+    let dockBadgeService: any DockBadgeUpdating
     private var canRefreshDoNotDisturb = true
     private var backfillConversationIndex = 0
+    private let workspaceLoadTimeout: Duration
+    let appTokenStore: (any SlackAppTokenStoring)?
+    let clientIDStore: (any SlackClientIDStoring)?
+    let socketModeClient: (any SlackSocketModeEventStreaming)?
 
     init(
         conversations: [Conversation] = SampleData.conversations(),
@@ -76,8 +188,18 @@ final class AppStore {
         customEmojiURLs: [String: URL] = [:],
         connectionState: ConnectionState = .preview,
         slackOAuth: SlackOAuthService? = nil,
-        credentialStore: SlackCredentialStore? = nil,
-        slackAPI: SlackAPIClient? = nil
+        credentialStore: (any SlackCredentialStoring)? = nil,
+        slackAPI: SlackAPIClient? = nil,
+        credentials: SlackCredentials? = nil,
+        outgoingMessageOutbox: OutgoingMessageOutbox? = nil,
+        messageMutationQueue: MessageMutationQueue? = nil,
+        appTokenStore: (any SlackAppTokenStoring)? = nil,
+        clientIDStore: (any SlackClientIDStoring)? = nil,
+        socketModeClient: (any SlackSocketModeEventStreaming)? = nil,
+        slackOAuthWebAuthenticator: (any SlackOAuthWebAuthenticating)? = nil,
+        notificationService: (any MessageNotificationDelivering)? = nil,
+        dockBadgeService: (any DockBadgeUpdating)? = nil,
+        workspaceLoadTimeout: Duration = .seconds(30)
     ) {
         self.conversations = conversations
         self.users = users
@@ -86,30 +208,81 @@ final class AppStore {
         self.slackOAuth = slackOAuth
         self.credentialStore = credentialStore
         self.slackAPI = slackAPI
+        self.credentials = credentials
+        self.outgoingMessageOutbox = outgoingMessageOutbox
+        self.messageMutationQueue = messageMutationQueue
+        self.appTokenStore = appTokenStore
+        self.clientIDStore = clientIDStore
+        self.socketModeClient = socketModeClient
+        self.slackOAuthWebAuthenticator =
+            slackOAuthWebAuthenticator ?? SlackOAuthWebAuthenticator()
+        self.notificationService = notificationService ?? MacNotificationService.shared
+        self.dockBadgeService = dockBadgeService ?? MacDockBadgeService.shared
+        self.workspaceLoadTimeout = workspaceLoadTimeout
+        readCursorsByConversationID = [:]
+        unreadBaselinedConversationIDs = Set(conversations.map(\.id))
         messageUsers = users
         usersByID = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        activityIndex = ActivityIndex(
+            conversations: conversations,
+            currentUserID: credentials?.userID
+        )
         composerSuggestionIndex = ComposerSuggestionIndex(
             users: users,
             conversations: conversations
         )
+        workspaceSearchIndex = WorkspaceSearchIndex(conversations: conversations)
         keyboardConversationID = unreadConversations.first?.id
     }
 
     static func live() -> AppStore {
-        guard let configuration = SlackConfiguration.bundled() else {
-            return AppStore(
-                conversations: [],
-                users: [],
-                connectionState: .needsConfiguration
-            )
-        }
+        let clientIDStore = SlackClientIDStore()
+        let storedClientID = try? clientIDStore.load()
+        let clientID = storedClientID
         return AppStore(
             conversations: [],
             users: [],
-            connectionState: .disconnected,
-            slackOAuth: SlackOAuthService(configuration: configuration),
+            connectionState: clientID == nil ? .needsConfiguration : .disconnected,
+            slackOAuth: clientID.map {
+                SlackOAuthService(configuration: SlackConfiguration(clientID: $0))
+            },
             credentialStore: SlackCredentialStore(),
-            slackAPI: SlackAPIClient()
+            slackAPI: SlackAPIClient(),
+            appTokenStore: SlackAppTokenStore(),
+            clientIDStore: clientIDStore,
+            socketModeClient: SlackSocketModeClient()
+        )
+    }
+
+    func configureSlackApp(clientID: String, appToken: String) throws {
+        let normalizedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAppToken = appToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedClientID.contains(".") else {
+            throw SlackAppSetupError.invalidClientID
+        }
+        guard normalizedAppToken.hasPrefix("xapp-") else {
+            throw SlackAppSetupError.invalidAppToken
+        }
+        guard let clientIDStore, let appTokenStore else {
+            throw WorkspaceConnectionError.unavailable
+        }
+        try clientIDStore.save(normalizedClientID)
+        try appTokenStore.save(normalizedAppToken)
+        slackOAuth = SlackOAuthService(
+            configuration: SlackConfiguration(clientID: normalizedClientID)
+        )
+        socketModeState = .notConfigured
+        if credentials == nil {
+            connectionState = .disconnected
+        } else {
+            restartSocketMode()
+        }
+    }
+
+    func savedSlackAppConfiguration() -> (clientID: String, appToken: String) {
+        (
+            clientID: clientIDStore.flatMap { try? $0.load() } ?? "",
+            appToken: appTokenStore.flatMap { try? $0.load() } ?? ""
         )
     }
 
@@ -129,6 +302,14 @@ final class AppStore {
             return nil
         }
         return conversations.first { $0.id == id }
+    }
+
+    var groupDirectMessageCandidates: [WorkspaceUser] {
+        users.filter { $0.id != credentials?.userID }
+    }
+
+    var canLeaveSelectedChannel: Bool {
+        selectedConversation?.kind == .channel
     }
 
     func user(withID userID: String) -> WorkspaceUser? {
@@ -152,6 +333,16 @@ final class AppStore {
                 draftsByConversationID[id] = newValue
             }
         }
+    }
+
+    func clearComposerDraft(
+        _ expectedDraft: ComposerDraft,
+        for conversationID: String
+    ) {
+        guard draftsByConversationID[conversationID] == expectedDraft else {
+            return
+        }
+        draftsByConversationID[conversationID] = nil
     }
 
     var draft: String {
@@ -223,6 +414,18 @@ final class AppStore {
             || "unreads".localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
     }
 
+    var quickSwitcherShowsActivity: Bool {
+        normalizedQuickSwitcherQuery.isEmpty
+            || "activity mentions reactions threads notifications"
+                .localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
+    }
+
+    var quickSwitcherShowsSaved: Bool {
+        normalizedQuickSwitcherQuery.isEmpty
+            || "saved messages bookmarks later"
+                .localizedCaseInsensitiveContains(normalizedQuickSwitcherQuery)
+    }
+
     var quickSwitcherUsers: [WorkspaceUser] {
         guard !normalizedQuickSwitcherQuery.isEmpty else {
             return users
@@ -261,6 +464,8 @@ final class AppStore {
 
     var hasQuickSwitcherResults: Bool {
         quickSwitcherShowsUnreads
+            || quickSwitcherShowsActivity
+            || quickSwitcherShowsSaved
             || !quickSwitcherUsers.isEmpty
             || !quickSwitcherGroupMessages.isEmpty
             || !quickSwitcherChannels.isEmpty
@@ -271,6 +476,12 @@ final class AppStore {
         if quickSwitcherShowsUnreads {
             items.append(.unreads)
         }
+        if quickSwitcherShowsActivity {
+            items.append(.activity)
+        }
+        if quickSwitcherShowsSaved {
+            items.append(.saved)
+        }
         items.append(contentsOf: quickSwitcherUsers.map { .user($0.id) })
         items.append(contentsOf: quickSwitcherGroupMessages.map { .channel($0.id) })
         items.append(contentsOf: quickSwitcherChannels.map { .channel($0.id) })
@@ -278,12 +489,16 @@ final class AppStore {
     }
 
     func select(_ conversationID: String) {
+        workspaceSearchFocus = nil
         keyboardConversationID = conversationID
         destination = .conversation(conversationID)
     }
 
     func loadInitialHistory(for conversationID: String) async {
-        await loadMessages(for: conversationID)
+        guard let session = try? captureWorkspaceSession() else {
+            return
+        }
+        await loadMessages(for: conversationID, session: session)
     }
 
     func historyState(for conversationID: String) -> ConversationHistoryState {
@@ -291,14 +506,20 @@ final class AppStore {
     }
 
     func loadOlderMessages(for conversationID: String) {
-        Task {
-            await loadOlderHistory(for: conversationID)
+        startWorkspaceOperation { [weak self] session in
+            await self?.loadOlderHistory(
+                for: conversationID,
+                session: session
+            )
         }
     }
 
     func retryHistory(for conversationID: String) {
-        Task {
-            await loadMessages(for: conversationID)
+        startWorkspaceOperation { [weak self] session in
+            await self?.loadMessages(
+                for: conversationID,
+                session: session
+            )
         }
     }
 
@@ -319,8 +540,11 @@ final class AppStore {
 
         if slackAPI != nil {
             dismissQuickSwitcher()
-            Task {
-                await openLiveDirectMessage(with: user)
+            startWorkspaceOperation { [weak self] session in
+                await self?.openLiveDirectMessage(
+                    with: user,
+                    session: session
+                )
             }
         } else if let existing = conversations.first(where: {
             ($0.id == userID || $0.participantUserID == userID) && $0.kind == .directMessage
@@ -347,6 +571,223 @@ final class AppStore {
             select(userID)
             dismissQuickSwitcher()
         }
+    }
+
+    static func normalizedChannelName(_ input: String) -> String {
+        input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: "-")
+    }
+
+    static func isValidChannelName(_ input: String) -> Bool {
+        let name = normalizedChannelName(input)
+        guard !name.isEmpty, name.count <= 80 else {
+            return false
+        }
+        return name.unicodeScalars.allSatisfy { scalar in
+            (97 ... 122).contains(scalar.value)
+                || (48 ... 57).contains(scalar.value)
+                || scalar == "-"
+                || scalar == "_"
+        }
+    }
+
+    func refreshPublicChannels() async throws {
+        guard let slackAPI else {
+            return
+        }
+        let session = try captureWorkspaceSession()
+        let credentials = try await activeCredentials(for: session)
+        let channels = try await slackAPI.fetchPublicChannels(
+            accessToken: credentials.accessToken
+        )
+        try requireCurrentWorkspaceSession(session)
+        publicChannels = channels
+    }
+
+    func joinPublicChannel(_ channel: SlackPublicChannel) async throws {
+        if channel.isMember,
+           let existing = conversations.first(where: { $0.id == channel.id })
+        {
+            select(existing.id)
+            return
+        }
+
+        let conversation: Conversation
+        if let slackAPI {
+            let session = try captureWorkspaceSession()
+            let credentials = try await activeCredentials(for: session)
+            let dto = try await slackAPI.joinConversation(
+                channelID: channel.id,
+                accessToken: credentials.accessToken
+            )
+            try requireCurrentWorkspaceSession(session)
+            conversation = channelConversation(
+                from: dto,
+                fallbackName: channel.name,
+                isPrivate: false
+            )
+        } else {
+            conversation = Conversation(
+                id: channel.id,
+                title: channel.name,
+                kind: .channel,
+                subtitle: channel.purpose,
+                isFavorite: false,
+                createdAt: .now,
+                unreadCount: 0,
+                mentionCount: 0,
+                latestActivity: .now,
+                messages: []
+            )
+        }
+        upsertConversation(conversation)
+        updatePublicChannel(channel, isMember: true)
+        select(conversation.id)
+    }
+
+    func createChannel(name input: String, isPrivate: Bool) async throws {
+        guard Self.isValidChannelName(input) else {
+            throw ConversationManagementError.invalidChannelName
+        }
+        let name = Self.normalizedChannelName(input)
+        let conversation: Conversation
+        if let slackAPI {
+            let session = try captureWorkspaceSession()
+            let credentials = try await activeCredentials(for: session)
+            let dto = try await slackAPI.createConversation(
+                name: name,
+                isPrivate: isPrivate,
+                accessToken: credentials.accessToken
+            )
+            try requireCurrentWorkspaceSession(session)
+            conversation = channelConversation(
+                from: dto,
+                fallbackName: name,
+                isPrivate: isPrivate
+            )
+        } else {
+            conversation = Conversation(
+                id: "preview-channel-\(UUID().uuidString)",
+                title: name,
+                kind: .channel,
+                isPrivate: isPrivate,
+                subtitle: nil,
+                isFavorite: false,
+                createdAt: .now,
+                unreadCount: 0,
+                mentionCount: 0,
+                latestActivity: .now,
+                messages: []
+            )
+        }
+        upsertConversation(conversation)
+        if !isPrivate {
+            updatePublicChannel(
+                SlackPublicChannel(
+                    id: conversation.id,
+                    name: conversation.title,
+                    purpose: conversation.subtitle,
+                    memberCount: 1,
+                    isMember: true
+                ),
+                isMember: true
+            )
+        }
+        select(conversation.id)
+    }
+
+    func leaveChannel(_ conversationID: String) async throws {
+        guard let conversation = conversations.first(where: {
+            $0.id == conversationID && $0.kind == .channel
+        }) else {
+            throw ConversationManagementError.channelNotFound
+        }
+        if let slackAPI {
+            let session = try captureWorkspaceSession()
+            let credentials = try await activeCredentials(for: session)
+            try await slackAPI.leaveConversation(
+                channelID: conversation.id,
+                accessToken: credentials.accessToken
+            )
+            try requireCurrentWorkspaceSession(session)
+        }
+
+        conversations.removeAll { $0.id == conversation.id }
+        draftsByConversationID[conversation.id] = nil
+        historyStates[conversation.id] = nil
+        loadedHistoryPageCounts[conversation.id] = nil
+        if !conversation.isPrivate {
+            updatePublicChannel(
+                SlackPublicChannel(
+                    id: conversation.id,
+                    name: conversation.title,
+                    purpose: conversation.subtitle,
+                    memberCount: nil,
+                    isMember: false
+                ),
+                isMember: false
+            )
+        }
+        rebuildComposerSuggestionIndex()
+        showUnreadInbox()
+    }
+
+    func startGroupDirectMessage(with userIDs: [String]) async throws {
+        var seen = Set<String>()
+        let uniqueIDs = userIDs.filter { seen.insert($0).inserted }
+        guard (2 ... 8).contains(uniqueIDs.count) else {
+            throw ConversationManagementError.invalidGroupSize
+        }
+        guard !uniqueIDs.contains(credentials?.userID ?? ""),
+              uniqueIDs.allSatisfy({ usersByID[$0] != nil })
+        else {
+            throw ConversationManagementError.invalidGroupMembers
+        }
+        let selectedUsers = uniqueIDs.compactMap { usersByID[$0] }
+        let participantIDs = Set(uniqueIDs)
+        if let existing = conversations.first(where: {
+            $0.kind == .groupDirectMessage
+                && Set($0.participants.map(\.id)) == participantIDs
+        }) {
+            select(existing.id)
+            return
+        }
+
+        let conversationID: String
+        if let slackAPI {
+            let session = try captureWorkspaceSession()
+            let credentials = try await activeCredentials(for: session)
+            conversationID = try await slackAPI.openGroupDirectMessage(
+                userIDs: uniqueIDs,
+                accessToken: credentials.accessToken
+            )
+            try requireCurrentWorkspaceSession(session)
+        } else {
+            conversationID = "preview-group-\(UUID().uuidString)"
+        }
+
+        if conversations.contains(where: { $0.id == conversationID }) {
+            select(conversationID)
+            return
+        }
+        let conversation = Conversation(
+            id: conversationID,
+            title: selectedUsers.map(\.displayName).joined(separator: ", "),
+            kind: .groupDirectMessage,
+            subtitle: "Group DM · \(selectedUsers.count) people",
+            isFavorite: false,
+            createdAt: .now,
+            participants: selectedUsers,
+            unreadCount: 0,
+            mentionCount: 0,
+            latestActivity: .now,
+            messages: []
+        )
+        upsertConversation(conversation)
+        select(conversation.id)
     }
 
     func openChannelFromQuickSwitcher(_ conversationID: String) {
@@ -392,6 +833,12 @@ final class AppStore {
         switch quickSwitcherSelection {
         case .unreads:
             openUnreadFromQuickSwitcher()
+        case .activity:
+            showActivityInbox()
+            dismissQuickSwitcher()
+        case .saved:
+            showSavedMessages()
+            dismissQuickSwitcher()
         case let .user(id):
             startDirectMessage(with: id)
         case let .channel(id):
@@ -439,6 +886,8 @@ final class AppStore {
         let currentID: String? = switch destination {
         case .unreadInbox:
             keyboardConversationID
+        case .activity, .savedMessages:
+            nil
         case let .conversation(id):
             id
         }
@@ -488,9 +937,14 @@ final class AppStore {
         let timestamp = conversations[index].messages.last?.remoteID
         conversations[index].unreadCount = 0
         conversations[index].mentionCount = 0
+        refreshDockBadge()
         if let timestamp, slackAPI != nil {
-            Task {
-                await markLiveConversationRead(channelID: id, timestamp: timestamp)
+            startWorkspaceOperation { [weak self] session in
+                await self?.markLiveConversationRead(
+                    channelID: id,
+                    timestamp: timestamp,
+                    session: session
+                )
             }
         }
     }
@@ -516,17 +970,23 @@ final class AppStore {
             timestamp: .now,
             authorAvatarURL: currentUser?.avatarURL,
             isCurrentUser: true,
-            displayBody: SlackEmoji.replacingUnicodeShortcodes(in: displayText)
+            displayBody: SlackEmoji.replacingUnicodeShortcodes(in: displayText),
+            deliveryState: slackAPI == nil ? .sent : .sending
         )
         conversations[index].messages.append(optimisticMessage)
+        workspaceSearchIndex.merge(
+            messages: [optimisticMessage],
+            conversation: conversations[index]
+        )
         conversations[index].latestActivity = .now
         composerDraft = ComposerDraft()
         if slackAPI != nil {
-            Task {
-                await sendLiveMessage(
+            startWorkspaceOperation { [weak self] session in
+                await self?.sendLiveMessage(
                     channelID: id,
                     text: outgoingText,
-                    localMessageID: optimisticMessage.id
+                    localMessageID: optimisticMessage.id,
+                    session: session
                 )
             }
         }
@@ -538,11 +998,14 @@ final class AppStore {
         else {
             return
         }
+        refreshWorkspaceAccounts()
         do {
             guard let storedCredentials = try credentialStore.load() else {
                 return
             }
             try await connect(with: storedCredentials)
+        } catch is WorkspaceSessionError {
+            return
         } catch {
             connectionState = .failed(error.localizedDescription)
         }
@@ -553,15 +1016,34 @@ final class AppStore {
             connectionState = .needsConfiguration
             return
         }
+        guard !isSlackWebAuthenticationActive else {
+            return
+        }
+        isSlackWebAuthenticationActive = true
+        defer {
+            isSlackWebAuthenticationActive = false
+        }
+        let hasActiveWorkspace = credentials != nil
         do {
             let url = try await slackOAuth.beginAuthorization()
-            connectionState = .authorizing
-            guard NSWorkspace.shared.open(url) else {
-                connectionState = .failed("Could not open Slack in your browser.")
+            if !hasActiveWorkspace {
+                connectionState = .authorizing
+            }
+            let callbackURL = try await slackOAuthWebAuthenticator.authenticate(at: url)
+            await handleSlackCallback(callbackURL)
+        } catch {
+            if error as? SlackOAuthWebAuthenticationError == .cancelled {
+                await slackOAuth.cancelAuthorization()
+                if !hasActiveWorkspace {
+                    connectionState = .disconnected
+                }
                 return
             }
-        } catch {
-            connectionState = .failed(error.localizedDescription)
+            if hasActiveWorkspace {
+                transientError = error.localizedDescription
+            } else {
+                connectionState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -569,74 +1051,197 @@ final class AppStore {
         guard url.scheme == "minislack", let slackOAuth else {
             return
         }
+        guard activeSlackCallbackURL == nil else {
+            return
+        }
+        activeSlackCallbackURL = url
+        defer {
+            activeSlackCallbackURL = nil
+        }
+        let existingCredentials = credentials
+        var clearedExistingSession = false
+        var replacementGeneration: UInt64?
         connectionState = .loading
         do {
             let newCredentials = try await slackOAuth.handleCallback(url)
+            clearWorkspaceSession()
+            clearedExistingSession = true
+            replacementGeneration = workspaceSessionGeneration
+            connectionState = .loading
             try await connect(with: newCredentials)
         } catch {
-            connectionState = .failed(error.localizedDescription)
+            let connectionError = error
+            if connectionError is WorkspaceSessionError {
+                return
+            }
+            if clearedExistingSession,
+               replacementGeneration != workspaceSessionGeneration
+            {
+                return
+            }
+            if let existingCredentials, clearedExistingSession {
+                do {
+                    try await connect(with: existingCredentials)
+                    transientError = connectionError.localizedDescription
+                } catch {
+                    connectionState = .failed(
+                        "Could not connect the new workspace, and \(existingCredentials.teamName) "
+                            + "could not be restored: \(error.localizedDescription)"
+                    )
+                }
+            } else if let existingCredentials, credentials != nil {
+                connectionState = .connected(existingCredentials.teamName)
+                transientError = connectionError.localizedDescription
+            } else {
+                connectionState = .failed(connectionError.localizedDescription)
+            }
         }
     }
 
     func cancelSlackSignIn() async {
+        slackOAuthWebAuthenticator.cancel()
         await slackOAuth?.cancelAuthorization()
-        connectionState = .disconnected
-    }
-
-    func retrySlackConnection() async {
         if let credentials {
-            do {
-                try await connect(with: credentials)
-            } catch {
-                connectionState = .failed(error.localizedDescription)
-            }
+            connectionState = .connected(credentials.teamName)
         } else {
             connectionState = .disconnected
         }
     }
 
+    func retrySlackConnection() async {
+        do {
+            let retryCredentials: SlackCredentials?
+            if let credentials {
+                retryCredentials = credentials
+            } else {
+                retryCredentials = try credentialStore?.load()
+            }
+            guard let retryCredentials else {
+                connectionState = .disconnected
+                return
+            }
+            try await connect(with: retryCredentials)
+        } catch is WorkspaceSessionError {
+            return
+        } catch {
+            connectionState = .failed(error.localizedDescription)
+        }
+    }
+
     func signOut() {
+        let workspaceID = credentials?.teamID
+        if let workspaceID {
+            do {
+                try credentialStore?.delete(teamID: workspaceID)
+            } catch {
+                transientError = error.localizedDescription
+            }
+        }
+        clearWorkspaceSession()
+        refreshWorkspaceAccounts()
+    }
+
+    func clearWorkspaceSession() {
+        workspaceSessionGeneration &+= 1
+        credentialRefreshTask?.cancel()
+        credentialRefreshTask = nil
+        credentialRefreshSession = nil
+        credentialRefreshID = nil
+        let operationTasks = workspaceOperationTasks.values
+        workspaceOperationTasks.removeAll()
+        operationTasks.forEach { $0.cancel() }
+        stopIncrementalSync()
+        stopSocketMode()
+        incrementalSyncCatchups = [:]
+        readCursorsByConversationID = [:]
+        unreadBaselinedConversationIDs = []
+        cancelOutgoingMessageReplay()
+        cancelMessageMutationReplay()
+        notificationService.onOpenConversation = nil
+        mutedConversationIDs = []
+        dockBadgeService.update(unreadCount: 0)
         historyBackfillTask?.cancel()
         historyBackfillTask = nil
         availabilityRefreshTask?.cancel()
         availabilityRefreshTask = nil
-        do {
-            try credentialStore?.delete()
-        } catch {
-            transientError = error.localizedDescription
-        }
+        workspaceSearchBackfillTask?.cancel()
+        workspaceSearchBackfillTask = nil
         credentials = nil
+        outgoingMessageOutbox = nil
+        messageMutationQueue = nil
+        messageMutationsByTarget = [:]
         users = []
         messageUsers = []
         usersByID = [:]
         customEmojiURLs = [:]
         conversations = []
+        workspaceSearchIndex.reset(conversations: [])
+        workspaceSearchFocus = nil
+        publicChannels = []
         draftsByConversationID = [:]
         composerSuggestionIndex = ComposerSuggestionIndex(users: [], conversations: [])
         historyStates = [:]
+        threadStates = [:]
+        activityIndex.reset(conversations: [], currentUserID: nil)
+        activityLastViewedAt = .distantPast
+        scheduledMessagesState = ScheduledMessagesState()
+        attachmentDraftsByConversationID = [:]
+        Task {
+            await ComposerAttachmentFileService.shared.clearTemporaryFiles()
+        }
+        savedMessages = []
+        savedMessageStore = nil
+        savedMessageRevision = 0
         loadedHistoryPageCounts = [:]
         historyCache = nil
+        keyboardConversationID = nil
+        quickSwitcherQuery = ""
+        quickSwitcherSelection = nil
         destination = .unreadInbox
         connectionState = .disconnected
     }
 
-    private func connect(with proposedCredentials: SlackCredentials) async throws {
+    func connect(with proposedCredentials: SlackCredentials) async throws {
         guard let slackOAuth, let credentialStore, let slackAPI else {
-            return
+            throw WorkspaceConnectionError.unavailable
         }
+        let connectionGeneration = workspaceSessionGeneration
         connectionState = .loading
         let activeCredentials: SlackCredentials
-        if proposedCredentials.needsRefresh() {
-            activeCredentials = try await slackOAuth.refresh(proposedCredentials)
-        } else {
-            activeCredentials = proposedCredentials
+        do {
+            if proposedCredentials.needsRefresh() {
+                activeCredentials = try await slackOAuth.refresh(proposedCredentials)
+            } else {
+                activeCredentials = proposedCredentials
+            }
+        } catch {
+            guard connectionGeneration == workspaceSessionGeneration else {
+                throw WorkspaceSessionError.changed
+            }
+            throw error
+        }
+        guard connectionGeneration == workspaceSessionGeneration else {
+            throw WorkspaceSessionError.changed
         }
         try credentialStore.save(activeCredentials)
-        let snapshot = try await slackAPI.fetchWorkspace(
-            accessToken: activeCredentials.accessToken,
-            currentUserID: activeCredentials.userID
-        )
+        refreshWorkspaceAccounts()
+        let snapshot: SlackWorkspaceSnapshot
+        do {
+            snapshot = try await fetchWorkspaceSnapshot(
+                slackAPI: slackAPI,
+                credentials: activeCredentials
+            )
+        } catch {
+            guard connectionGeneration == workspaceSessionGeneration else {
+                throw WorkspaceSessionError.changed
+            }
+            throw error
+        }
+        guard connectionGeneration == workspaceSessionGeneration else {
+            throw WorkspaceSessionError.changed
+        }
         credentials = activeCredentials
+        workspaceSearchBackfillTask?.cancel()
         historyCache = MessageHistoryCache(workspaceID: activeCredentials.teamID)
         users = snapshot.users
         messageUsers = snapshot.messageUsers
@@ -645,6 +1250,15 @@ final class AppStore {
         )
         customEmojiURLs = snapshot.customEmojiURLs
         conversations = snapshot.conversations
+        readCursorsByConversationID = snapshot.readCursorsByConversationID
+        unreadBaselinedConversationIDs =
+            snapshot.conversationsWithAuthoritativeUnreadCounts
+        resetActivity(
+            conversations: snapshot.conversations,
+            currentUserID: activeCredentials.userID,
+            teamID: activeCredentials.teamID
+        )
+        workspaceSearchIndex.reset(conversations: snapshot.conversations)
         composerSuggestionIndex = ComposerSuggestionIndex(
             users: snapshot.users,
             conversations: snapshot.conversations
@@ -653,48 +1267,209 @@ final class AppStore {
         keyboardConversationID = unreadConversations.first?.id
         connectionState = .connected(activeCredentials.teamName)
         canRefreshDoNotDisturb = true
-        Task {
-            await refreshConversationMetadata(accessToken: activeCredentials.accessToken)
+        let session = WorkspaceSession(
+            generation: connectionGeneration,
+            teamID: activeCredentials.teamID
+        )
+        startWorkspaceOperation { [weak self] session in
+            await self?.refreshCustomEmoji(session: session)
+        }
+        startWorkspaceOperation { [weak self] session in
+            await self?.hydratePriorityGroupDirectMessages(session: session)
+        }
+        await loadSavedMessages(for: activeCredentials.teamID, session: session)
+        guard isCurrentWorkspaceSession(session) else {
+            return
+        }
+        await restoreOutgoingMessages(for: activeCredentials.teamID)
+        guard isCurrentWorkspaceSession(session) else {
+            return
+        }
+        await restoreMessageMutations(for: activeCredentials.teamID)
+        guard isCurrentWorkspaceSession(session) else {
+            return
         }
         startHistoryBackfill()
+        startWorkspaceSearchBackfill()
         startAvailabilityRefresh()
+        loadConversationMutes(workspaceID: activeCredentials.teamID)
+        refreshDockBadge()
+        startIncrementalSync()
+        startSocketMode()
+        scheduleOutgoingMessageReplay()
+        scheduleMessageMutationReplay()
     }
 
-    private func activeCredentials() async throws -> SlackCredentials {
-        guard let credentials, let slackOAuth, let credentialStore else {
+    private func fetchWorkspaceSnapshot(
+        slackAPI: SlackAPIClient,
+        credentials: SlackCredentials
+    ) async throws -> SlackWorkspaceSnapshot {
+        try await withThrowingTaskGroup(of: SlackWorkspaceSnapshot.self) { group in
+            group.addTask {
+                try await slackAPI.fetchWorkspace(
+                    accessToken: credentials.accessToken,
+                    currentUserID: credentials.userID
+                )
+            }
+            group.addTask { [workspaceLoadTimeout] in
+                try await Task.sleep(for: workspaceLoadTimeout)
+                throw WorkspaceConnectionError.timedOut
+            }
+            defer {
+                group.cancelAll()
+            }
+            guard let snapshot = try await group.next() else {
+                throw WorkspaceConnectionError.unavailable
+            }
+            return snapshot
+        }
+    }
+
+    private func refreshCustomEmoji(session: WorkspaceSession) async {
+        guard let slackAPI,
+              let credentials = try? await activeCredentials(for: session),
+              let emoji = try? await slackAPI.fetchCustomEmojiURLs(
+                  accessToken: credentials.accessToken
+              ),
+              isCurrentWorkspaceSession(session)
+        else {
+            return
+        }
+        customEmojiURLs = emoji
+    }
+
+    func activeCredentials() async throws -> SlackCredentials {
+        try await activeCredentials(for: captureWorkspaceSession())
+    }
+
+    func captureWorkspaceSession() throws -> WorkspaceSession {
+        guard let teamID = credentials?.teamID else {
             throw SlackOAuthService.OAuthError.invalidTokenResponse
+        }
+        return WorkspaceSession(
+            generation: workspaceSessionGeneration,
+            teamID: teamID
+        )
+    }
+
+    func isCurrentWorkspaceSession(_ session: WorkspaceSession) -> Bool {
+        session.generation == workspaceSessionGeneration
+            && session.teamID == credentials?.teamID
+    }
+
+    func requireCurrentWorkspaceSession(
+        _ session: WorkspaceSession
+    ) throws {
+        guard isCurrentWorkspaceSession(session) else {
+            throw WorkspaceSessionError.changed
+        }
+    }
+
+    func activeCredentials(
+        for session: WorkspaceSession
+    ) async throws -> SlackCredentials {
+        try requireCurrentWorkspaceSession(session)
+        guard let credentials, credentials.teamID == session.teamID else {
+            throw WorkspaceSessionError.changed
         }
         guard credentials.needsRefresh() else {
             return credentials
         }
-        let refreshed = try await slackOAuth.refresh(credentials)
-        try credentialStore.save(refreshed)
-        self.credentials = refreshed
-        return refreshed
+        guard let slackOAuth, let credentialStore else {
+            throw SlackOAuthService.OAuthError.invalidTokenResponse
+        }
+
+        let refreshID: UUID
+        let refreshTask: Task<SlackCredentials, Error>
+        if let credentialRefreshTask,
+           credentialRefreshSession == session,
+           let credentialRefreshID
+        {
+            refreshID = credentialRefreshID
+            refreshTask = credentialRefreshTask
+        } else {
+            credentialRefreshTask?.cancel()
+            refreshID = UUID()
+            refreshTask = Task {
+                try await slackOAuth.refresh(credentials)
+            }
+            credentialRefreshTask = refreshTask
+            credentialRefreshSession = session
+            credentialRefreshID = refreshID
+        }
+
+        do {
+            let refreshed = try await refreshTask.value
+            if credentialRefreshID == refreshID {
+                credentialRefreshTask = nil
+                credentialRefreshSession = nil
+                credentialRefreshID = nil
+            }
+            try requireCurrentWorkspaceSession(session)
+            guard refreshed.teamID == session.teamID else {
+                throw WorkspaceSessionError.changed
+            }
+            try credentialStore.save(refreshed)
+            refreshWorkspaceAccounts()
+            self.credentials = refreshed
+            return refreshed
+        } catch {
+            if credentialRefreshID == refreshID {
+                credentialRefreshTask = nil
+                credentialRefreshSession = nil
+                credentialRefreshID = nil
+            }
+            throw error
+        }
     }
 
-    private func loadMessages(for channelID: String) async {
-        guard let slackAPI,
+    func startWorkspaceOperation(
+        _ operation: @escaping @MainActor (WorkspaceSession) async -> Void
+    ) {
+        guard let session = try? captureWorkspaceSession() else {
+            return
+        }
+        let operationID = UUID()
+        let task = Task { [weak self] in
+            await operation(session)
+            self?.workspaceOperationTasks[operationID] = nil
+        }
+        workspaceOperationTasks[operationID] = task
+    }
+
+    private func loadMessages(
+        for channelID: String,
+        session: WorkspaceSession
+    ) async {
+        guard isCurrentWorkspaceSession(session),
+              let slackAPI,
               historyStates[channelID]?.isLoadingInitial != true
         else {
             return
         }
+        let historyCache = self.historyCache
         historyStates[channelID, default: ConversationHistoryState()].isLoadingInitial = true
         historyStates[channelID]?.errorMessage = nil
 
         if let historyCache,
            let cachedPage = try? await historyCache.page(channelID: channelID, index: 0)
         {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             apply(cachedPage.messages, to: channelID)
             historyStates[channelID]?.hasLoadedInitial = true
             loadedHistoryPageCounts[channelID] = 1
             let status = try? await historyCache.status(channelID: channelID)
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             historyStates[channelID]?.canLoadOlder =
                 (status?.pageCount ?? 0) > 1 || cachedPage.nextCursor != nil
         }
 
         do {
-            let credentials = try await activeCredentials()
+            let credentials = try await activeCredentials(for: session)
             let page = try await slackAPI.fetchMessagePage(
                 channelID: channelID,
                 accessToken: credentials.accessToken,
@@ -702,11 +1477,13 @@ final class AppStore {
                 channelNames: conversationNamesByID,
                 currentUserID: credentials.userID
             )
+            try requireCurrentWorkspaceSession(session)
             if let historyCache {
                 try? await historyCache.mergeLatest(
                     MessageHistoryPage(messages: page.messages, nextCursor: page.nextCursor),
                     channelID: channelID
                 )
+                try requireCurrentWorkspaceSession(session)
             }
             apply(page.messages, to: channelID)
             loadedHistoryPageCounts[channelID] = max(loadedHistoryPageCounts[channelID] ?? 0, 1)
@@ -726,20 +1503,32 @@ final class AppStore {
                 if destination == .conversation(channelID), shouldMarkRead {
                     conversations[index].unreadCount = 0
                     conversations[index].mentionCount = 0
+                    refreshDockBadge()
                     if let timestamp = latest.remoteID {
-                        await markLiveConversationRead(channelID: channelID, timestamp: timestamp)
+                        await markLiveConversationRead(
+                            channelID: channelID,
+                            timestamp: timestamp,
+                            session: session
+                        )
                     }
                 }
             }
         } catch {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             historyStates[channelID]?.hasLoadedInitial = true
             historyStates[channelID]?.isLoadingInitial = false
             historyStates[channelID]?.errorMessage = error.localizedDescription
         }
     }
 
-    private func loadOlderHistory(for channelID: String) async {
-        guard let slackAPI,
+    private func loadOlderHistory(
+        for channelID: String,
+        session: WorkspaceSession
+    ) async {
+        guard isCurrentWorkspaceSession(session),
+              let slackAPI,
               let historyCache,
               historyStates[channelID]?.isLoadingOlder != true,
               historyStates[channelID]?.canLoadOlder == true
@@ -751,9 +1540,15 @@ final class AppStore {
 
         let pageIndex = loadedHistoryPageCounts[channelID] ?? 1
         if let cachedPage = try? await historyCache.page(channelID: channelID, index: pageIndex) {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             apply(cachedPage.messages, to: channelID)
             loadedHistoryPageCounts[channelID] = pageIndex + 1
             let status = try? await historyCache.status(channelID: channelID)
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             historyStates[channelID]?.canLoadOlder =
                 (status?.pageCount ?? 0) > pageIndex + 1 || cachedPage.nextCursor != nil
             historyStates[channelID]?.isLoadingOlder = false
@@ -765,13 +1560,17 @@ final class AppStore {
             index: pageIndex - 1
         ), let cursor = previousPage.nextCursor
         else {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             historyStates[channelID]?.canLoadOlder = false
             historyStates[channelID]?.isLoadingOlder = false
             return
         }
 
         do {
-            let credentials = try await activeCredentials()
+            try requireCurrentWorkspaceSession(session)
+            let credentials = try await activeCredentials(for: session)
             let page = try await slackAPI.fetchMessagePage(
                 channelID: channelID,
                 cursor: cursor,
@@ -780,21 +1579,32 @@ final class AppStore {
                 channelNames: conversationNamesByID,
                 currentUserID: credentials.userID
             )
+            try requireCurrentWorkspaceSession(session)
             let cachedPage = MessageHistoryPage(
                 messages: page.messages,
                 nextCursor: page.nextCursor
             )
             try await historyCache.store(cachedPage, channelID: channelID, index: pageIndex)
+            try requireCurrentWorkspaceSession(session)
             apply(page.messages, to: channelID)
             loadedHistoryPageCounts[channelID] = pageIndex + 1
             historyStates[channelID]?.canLoadOlder = page.nextCursor != nil
         } catch {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             historyStates[channelID]?.errorMessage = error.localizedDescription
         }
         historyStates[channelID]?.isLoadingOlder = false
     }
 
-    private func openLiveDirectMessage(with user: WorkspaceUser) async {
+    private func openLiveDirectMessage(
+        with user: WorkspaceUser,
+        session: WorkspaceSession
+    ) async {
+        guard isCurrentWorkspaceSession(session) else {
+            return
+        }
         if let existing = conversations.first(where: { $0.participantUserID == user.id }) {
             select(existing.id)
             return
@@ -803,11 +1613,12 @@ final class AppStore {
             return
         }
         do {
-            let credentials = try await activeCredentials()
+            let credentials = try await activeCredentials(for: session)
             let channelID = try await slackAPI.openDirectMessage(
                 userID: user.id,
                 accessToken: credentials.accessToken
             )
+            try requireCurrentWorkspaceSession(session)
             if !conversations.contains(where: { $0.id == channelID }) {
                 conversations.append(
                     Conversation(
@@ -829,46 +1640,140 @@ final class AppStore {
             }
             select(channelID)
         } catch {
-            transientError = error.localizedDescription
-        }
-    }
-
-    private func sendLiveMessage(channelID: String, text: String, localMessageID: UUID) async {
-        guard let slackAPI else {
-            return
-        }
-        do {
-            let credentials = try await activeCredentials()
-            let sentMessage = try await slackAPI.sendMessage(
-                channelID: channelID,
-                text: text,
-                accessToken: credentials.accessToken
-            )
-            guard let conversationIndex = conversations.firstIndex(where: { $0.id == channelID }),
-                  let messageIndex = conversations[conversationIndex].messages.firstIndex(where: {
-                      $0.id == localMessageID
-                  })
-            else {
+            guard isCurrentWorkspaceSession(session) else {
                 return
             }
-            conversations[conversationIndex].messages[messageIndex].remoteID = sentMessage.timestamp
-        } catch {
             transientError = error.localizedDescription
         }
     }
 
-    private func markLiveConversationRead(channelID: String, timestamp: String) async {
+    private func channelConversation(
+        from dto: SlackConversationDTO,
+        fallbackName: String,
+        isPrivate: Bool
+    ) -> Conversation {
+        let createdAt = dto.created
+            .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            ?? .now
+        let subtitle: String? = if dto.topic?.value.isEmpty == false {
+            dto.topic?.value
+        } else if dto.purpose?.value.isEmpty == false {
+            dto.purpose?.value
+        } else {
+            nil
+        }
+        return Conversation(
+            id: dto.id,
+            title: dto.name ?? fallbackName,
+            kind: .channel,
+            isPrivate: isPrivate,
+            subtitle: subtitle,
+            isFavorite: dto.isStarred,
+            createdAt: createdAt,
+            topic: dto.topic?.value.isEmpty == false ? dto.topic?.value : nil,
+            purpose: dto.purpose?.value.isEmpty == false ? dto.purpose?.value : nil,
+            isArchived: dto.isArchived,
+            unreadCount: dto.unreadCountDisplay,
+            mentionCount: 0,
+            latestActivity: createdAt,
+            messages: []
+        )
+    }
+
+    func upsertConversation(_ conversation: Conversation) {
+        if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+            let messages = conversations[index].messages
+            conversations[index] = conversation
+            conversations[index].messages = messages
+        } else {
+            conversations.append(conversation)
+        }
+        rebuildComposerSuggestionIndex()
+    }
+
+    func updatePublicChannel(
+        _ channel: SlackPublicChannel,
+        isMember: Bool
+    ) {
+        let updated = SlackPublicChannel(
+            id: channel.id,
+            name: channel.name,
+            purpose: channel.purpose,
+            memberCount: channel.memberCount,
+            isMember: isMember
+        )
+        if let index = publicChannels.firstIndex(where: { $0.id == channel.id }) {
+            publicChannels[index] = updated
+        } else {
+            publicChannels.append(updated)
+            publicChannels.sort {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        }
+    }
+
+    func removePublicChannel(_ channelID: String) {
+        publicChannels.removeAll { $0.id == channelID }
+    }
+
+    private func rebuildComposerSuggestionIndex() {
+        composerSuggestionIndex = ComposerSuggestionIndex(
+            users: users,
+            conversations: conversations
+        )
+    }
+
+    private func sendLiveMessage(
+        channelID: String,
+        text: String,
+        localMessageID: UUID,
+        session: WorkspaceSession
+    ) async {
+        await sendOutgoingMessage(
+            conversationID: channelID,
+            semanticText: text,
+            localMessageID: localMessageID,
+            session: session
+        )
+    }
+
+    func markLiveConversationRead(
+        channelID: String,
+        timestamp: String,
+        session proposedSession: WorkspaceSession? = nil
+    ) async {
         guard let slackAPI else {
             return
         }
+        guard let session = proposedSession ?? (try? captureWorkspaceSession()) else {
+            return
+        }
+        let historyCache = self.historyCache
         do {
-            let credentials = try await activeCredentials()
+            let credentials = try await activeCredentials(for: session)
             try await slackAPI.markRead(
                 channelID: channelID,
                 timestamp: timestamp,
                 accessToken: credentials.accessToken
             )
+            try requireCurrentWorkspaceSession(session)
+            let readCursor = MessageHistoryReadCursor(
+                remoteID: timestamp,
+                timestamp: Double(timestamp).map {
+                    Date(timeIntervalSince1970: $0)
+                }
+            )
+            try? await historyCache?.setReadCursor(
+                readCursor,
+                channelID: channelID
+            )
+            try requireCurrentWorkspaceSession(session)
+            readCursorsByConversationID[channelID] = readCursor
+            unreadBaselinedConversationIDs.insert(channelID)
         } catch {
+            guard isCurrentWorkspaceSession(session) else {
+                return
+            }
             transientError = error.localizedDescription
         }
     }
@@ -877,6 +1782,8 @@ final class AppStore {
         switch destination {
         case .unreadInbox:
             return unreadConversations.map(\.id)
+        case .activity, .savedMessages:
+            return []
         case .conversation:
             let unreadIDs = unreadConversations.map(\.id)
             return unreadIDs + conversations.map(\.id).filter { !unreadIDs.contains($0) }
@@ -887,7 +1794,7 @@ final class AppStore {
         quickSwitcherQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var conversationNamesByID: [String: String] {
+    var conversationNamesByID: [String: String] {
         Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0.title) })
     }
 
@@ -915,7 +1822,11 @@ final class AppStore {
         }
     }
 
-    private func apply(_ messages: [Message], to channelID: String) {
+    func apply(
+        _ messages: [Message],
+        to channelID: String,
+        activityObservedAt: Date? = nil
+    ) {
         guard let index = conversations.firstIndex(where: { $0.id == channelID }) else {
             return
         }
@@ -930,13 +1841,60 @@ final class AppStore {
             ),
             channelNames: conversationNamesByID
         )
+        var preparedMessages: [Message] = []
+        preparedMessages.reserveCapacity(messages.count)
         for message in messages {
             let message = message.preparingForDisplay(context: formattingContext)
+            if message.remoteID != nil {
+                messagesByID["local:\(message.id)"] = nil
+            }
             let key = message.remoteID.map { "remote:\($0)" } ?? "local:\(message.id)"
             messagesByID[key] = message
+            preparedMessages.append(message)
         }
         conversations[index].messages = messagesByID.values.sorted {
             $0.timestamp < $1.timestamp
+        }
+        workspaceSearchIndex.merge(
+            messages: preparedMessages,
+            conversation: conversations[index]
+        )
+        activityIndex.merge(
+            messages: preparedMessages,
+            conversation: conversations[index],
+            currentUserID: credentials?.userID,
+            observedAt: activityObservedAt
+        )
+        refreshSavedMessageSnapshots(
+            preparedMessages,
+            conversationID: channelID
+        )
+        reconcileOutgoingMessages(preparedMessages)
+        reconcileMessageMutations(
+            preparedMessages,
+            conversationID: channelID
+        )
+    }
+
+    private func startWorkspaceSearchBackfill() {
+        workspaceSearchBackfillTask?.cancel()
+        guard let historyCache else {
+            workspaceSearchBackfillTask = nil
+            return
+        }
+        workspaceSearchBackfillTask = Task(priority: .utility) {
+            while !Task.isCancelled {
+                do {
+                    if try await historyCache.backfillSearchIndex(
+                        maximumMessages: 100
+                    ) {
+                        return
+                    }
+                } catch {
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
         }
     }
 
@@ -1049,7 +2007,9 @@ final class AppStore {
             guard let slackAPI else {
                 return
             }
-            guard let credentials = try? await activeCredentials() else {
+            guard let session = try? captureWorkspaceSession(),
+                  let credentials = try? await activeCredentials(for: session)
+            else {
                 try? await Task.sleep(for: .seconds(30))
                 continue
             }
@@ -1058,6 +2018,9 @@ final class AppStore {
                 if let profiles = try? await slackAPI.fetchWorkspaceUsers(
                     accessToken: credentials.accessToken
                 ) {
+                    guard isCurrentWorkspaceSession(session) else {
+                        return
+                    }
                     applyUserProfiles(profiles)
                 }
                 nextProfileRefresh = Date.now.addingTimeInterval(300)
@@ -1070,6 +2033,9 @@ final class AppStore {
                         userIDs: userIDs,
                         accessToken: credentials.accessToken
                     )
+                    guard isCurrentWorkspaceSession(session) else {
+                        return
+                    }
                     applyDoNotDisturb(statuses)
                 } catch let SlackAPIClient.APIError.slack(error) where error == "missing_scope" {
                     canRefreshDoNotDisturb = false
@@ -1093,6 +2059,9 @@ final class AppStore {
                         currentUserID: credentials.userID,
                         accessToken: credentials.accessToken
                     )
+                    guard isCurrentWorkspaceSession(session) else {
+                        return
+                    }
                     updateAvailability(
                         UserAvailability(
                             presence: presence,
@@ -1172,11 +2141,15 @@ final class AppStore {
         guard let slackAPI, let historyCache, !conversations.isEmpty else {
             return nil
         }
+        guard let session = try? captureWorkspaceSession() else {
+            return nil
+        }
 
         for offset in conversations.indices {
             let index = (backfillConversationIndex + offset) % conversations.count
             let conversationID = conversations[index].id
             guard let status = try? await historyCache.status(channelID: conversationID),
+                  isCurrentWorkspaceSession(session),
                   !status.isComplete
             else {
                 continue
@@ -1184,7 +2157,7 @@ final class AppStore {
 
             backfillConversationIndex = (index + 1) % conversations.count
             do {
-                let credentials = try await activeCredentials()
+                let credentials = try await activeCredentials(for: session)
                 let page = try await slackAPI.fetchMessagePage(
                     channelID: conversationID,
                     cursor: status.pageCount == 0 ? nil : status.nextCursor,
@@ -1193,10 +2166,16 @@ final class AppStore {
                     channelNames: conversationNamesByID,
                     currentUserID: credentials.userID
                 )
+                try requireCurrentWorkspaceSession(session)
                 try await historyCache.store(
                     MessageHistoryPage(messages: page.messages, nextCursor: page.nextCursor),
                     channelID: conversationID,
                     index: status.pageCount
+                )
+                try requireCurrentWorkspaceSession(session)
+                workspaceSearchIndex.merge(
+                    messages: page.messages,
+                    conversation: conversations[index]
                 )
                 return nil
             } catch let SlackAPIClient.APIError.rateLimited(seconds) {
@@ -1208,35 +2187,4 @@ final class AppStore {
         return .seconds(30)
     }
 
-    private func refreshConversationMetadata(accessToken: String) async {
-        guard let slackAPI else {
-            return
-        }
-        let conversationIDs = conversations.map(\.id)
-        await withTaskGroup(of: SlackConversationMetadata?.self) { group in
-            for conversationID in conversationIDs {
-                group.addTask {
-                    try? await slackAPI.fetchConversationMetadata(
-                        channelID: conversationID,
-                        accessToken: accessToken
-                    )
-                }
-            }
-
-            for await metadata in group {
-                guard let metadata,
-                      let index = conversations.firstIndex(where: {
-                          $0.id == metadata.conversationID
-                      })
-                else {
-                    continue
-                }
-                conversations[index].createdAt = metadata.createdAt
-                conversations[index].latestActivity = max(
-                    conversations[index].latestActivity,
-                    metadata.latestActivity
-                )
-            }
-        }
-    }
 }

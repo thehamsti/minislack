@@ -7,10 +7,38 @@ struct ComposerTextView: NSViewRepresentable {
     @Binding var height: CGFloat
     let suggestionsVisible: Bool
     let accessibilityLabel: String
+    let pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)?
     let moveSuggestion: (Int) -> Void
     let acceptSuggestion: () -> Void
     let dismissSuggestions: () -> Void
+    let format: (ComposerFormatting) -> Void
     let send: () -> Void
+
+    init(
+        draft: Binding<ComposerDraft>,
+        selection: Binding<NSRange>,
+        height: Binding<CGFloat>,
+        suggestionsVisible: Bool,
+        accessibilityLabel: String,
+        pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)? = nil,
+        moveSuggestion: @escaping (Int) -> Void,
+        acceptSuggestion: @escaping () -> Void,
+        dismissSuggestions: @escaping () -> Void,
+        format: @escaping (ComposerFormatting) -> Void,
+        send: @escaping () -> Void
+    ) {
+        _draft = draft
+        _selection = selection
+        _height = height
+        self.suggestionsVisible = suggestionsVisible
+        self.accessibilityLabel = accessibilityLabel
+        self.pasteAttachments = pasteAttachments
+        self.moveSuggestion = moveSuggestion
+        self.acceptSuggestion = acceptSuggestion
+        self.dismissSuggestions = dismissSuggestions
+        self.format = format
+        self.send = send
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -94,9 +122,11 @@ struct ComposerTextView: NSViewRepresentable {
 
         fileprivate func configure(_ textView: ComposerNSTextView) {
             textView.suggestionsVisible = parent.suggestionsVisible
+            textView.pasteAttachments = parent.pasteAttachments
             textView.moveSuggestion = parent.moveSuggestion
             textView.acceptSuggestion = parent.acceptSuggestion
             textView.dismissSuggestions = parent.dismissSuggestions
+            textView.format = parent.format
             textView.send = parent.send
             textView.setAccessibilityLabel(parent.accessibilityLabel)
         }
@@ -208,10 +238,27 @@ struct ComposerTextView: NSViewRepresentable {
 @MainActor
 fileprivate final class ComposerNSTextView: NSTextView {
     var suggestionsVisible = false
+    var pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)?
     var moveSuggestion: ((Int) -> Void)?
     var acceptSuggestion: (() -> Void)?
     var dismissSuggestions: (() -> Void)?
+    var format: ((ComposerFormatting) -> Void)?
     var send: (() -> Void)?
+
+    override func paste(_ sender: Any?) {
+        guard let pasteAttachments else {
+            super.paste(sender)
+            return
+        }
+        let attachments = ComposerPasteboardReader.attachments(
+            from: .general
+        )
+        guard !attachments.isEmpty else {
+            super.paste(sender)
+            return
+        }
+        pasteAttachments(attachments)
+    }
 
     override func keyDown(with event: NSEvent) {
         if hasMarkedText() {
@@ -222,6 +269,18 @@ fileprivate final class ComposerNSTextView: NSTextView {
         let textNavigationModifiers = event.modifierFlags.intersection([
             .command, .control, .option, .shift,
         ])
+        if event.modifierFlags.intersection([.command, .control, .option]) == .command {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "b":
+                format?(.bold)
+                return
+            case "i":
+                format?(.italic)
+                return
+            default:
+                break
+            }
+        }
         switch event.keyCode {
         case 125 where suggestionsVisible && textNavigationModifiers.isEmpty:
             moveSuggestion?(1)

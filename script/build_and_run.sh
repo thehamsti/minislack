@@ -51,7 +51,7 @@ ditto --noextattr --noqtn "$STAGED_APP_BUNDLE" "$APP_BUNDLE"
 xattr -cr "$APP_BUNDLE"
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/open -n "$APP_BUNDLE"
 }
 
 case "$MODE" in

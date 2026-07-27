@@ -4,14 +4,24 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     let author: String
     let authorUserID: String?
-    let body: String
+    var body: String
     let timestamp: Date
     let authorAvatarURL: URL?
     var remoteID: String?
     let isCurrentUser: Bool
-    let displayBody: String
-    let reactions: [Reaction]
+    var displayBody: String
+    var richText: MessageRichText?
+    let integration: MessageIntegration?
+    let attachments: [MessageAttachment]
+    let files: [MessageFile]
+    let images: [MessageImage]
+    var reactions: [Reaction]
     let emojiUnicode: [String: String]
+    var editedAt: Date?
+    var isDeleted: Bool
+    var deliveryState: MessageDeliveryState
+    var thread: MessageThreadMetadata?
+    var isPinned: Bool
 
     init(
         id: UUID = UUID(),
@@ -23,8 +33,18 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         remoteID: String? = nil,
         isCurrentUser: Bool = false,
         displayBody: String? = nil,
+        richText: MessageRichText? = nil,
+        integration: MessageIntegration? = nil,
+        attachments: [MessageAttachment] = [],
+        files: [MessageFile] = [],
+        images: [MessageImage] = [],
         reactions: [Reaction] = [],
-        emojiUnicode: [String: String] = [:]
+        emojiUnicode: [String: String] = [:],
+        editedAt: Date? = nil,
+        isDeleted: Bool = false,
+        deliveryState: MessageDeliveryState = .received,
+        thread: MessageThreadMetadata? = nil,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.author = author
@@ -38,8 +58,18 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             in: body,
             messageEmoji: emojiUnicode
         )
+        self.richText = richText
+        self.integration = integration
+        self.attachments = attachments
+        self.files = files
+        self.images = images
         self.reactions = reactions
         self.emojiUnicode = emojiUnicode
+        self.editedAt = editedAt
+        self.isDeleted = isDeleted
+        self.deliveryState = deliveryState
+        self.thread = thread
+        self.isPinned = isPinned
     }
 
     var initials: String {
@@ -52,6 +82,36 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             .uppercased()
     }
 
+    var copyText: String {
+        let messageText = richText?.plainText ?? displayBody
+        if !messageText.isEmpty {
+            return messageText
+        }
+        return (
+            attachments.compactMap(\.summary)
+                + files.map(\.displayName)
+                + images.map(\.altText)
+        )
+        .joined(separator: "\n")
+    }
+
+    var compactPreviewText: String {
+        let messageText = richText?.plainText ?? displayBody
+        if !messageText.isEmpty {
+            return messageText
+        }
+        if let summary = attachments.lazy.compactMap(\.summary).first {
+            return summary
+        }
+        if let file = files.first {
+            return file.displayName
+        }
+        if let image = images.first {
+            return image.altText
+        }
+        return integration.map { "Message from \($0.name)" } ?? "Slack message"
+    }
+
     func preparingForDisplay(context: SlackMessageFormatting.Context) -> Message {
         Message(
             id: id,
@@ -62,20 +122,37 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             authorAvatarURL: authorAvatarURL,
             remoteID: remoteID,
             isCurrentUser: isCurrentUser,
-            displayBody: SlackEmoji.replacingUnicodeShortcodes(
-                in: SlackMessageFormatting.render(in: body, context: context),
-                messageEmoji: emojiUnicode
-            ),
+            displayBody: isDeleted
+                ? displayBody
+                : SlackEmoji.replacingUnicodeShortcodes(
+                    in: SlackMessageFormatting.render(in: body, context: context),
+                    messageEmoji: emojiUnicode
+                ),
+            richText: richText?.resolving(context: context, messageEmoji: emojiUnicode),
+            integration: integration,
+            attachments: attachments.map {
+                $0.resolving(context: context, messageEmoji: emojiUnicode)
+            },
+            files: files,
+            images: images,
             reactions: reactions.map {
                 Reaction(
+                    name: $0.name,
                     emoji: SlackEmoji.replacingUnicodeShortcodes(
                         in: $0.emoji,
                         messageEmoji: emojiUnicode
                     ),
-                    count: $0.count
+                    count: $0.count,
+                    userIDs: $0.userIDs,
+                    isCurrentUserIncluded: $0.isCurrentUserIncluded
                 )
             },
-            emojiUnicode: emojiUnicode
+            emojiUnicode: emojiUnicode,
+            editedAt: editedAt,
+            isDeleted: isDeleted,
+            deliveryState: deliveryState,
+            thread: thread,
+            isPinned: isPinned
         )
     }
 
@@ -89,8 +166,18 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         case remoteID
         case isCurrentUser
         case displayBody
+        case richText
+        case integration
+        case attachments
+        case files
+        case images
         case reactions
         case emojiUnicode
+        case editedAt
+        case isDeleted
+        case deliveryState
+        case thread
+        case isPinned
     }
 
     init(from decoder: Decoder) throws {
@@ -115,10 +202,70 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             in: body,
             messageEmoji: emojiUnicode
         )
+        richText = try container.decodeIfPresent(MessageRichText.self, forKey: .richText)
+        integration = try container.decodeIfPresent(
+            MessageIntegration.self,
+            forKey: .integration
+        )
+        attachments = try container.decodeIfPresent(
+            [MessageAttachment].self,
+            forKey: .attachments
+        ) ?? []
+        files = try container.decodeIfPresent([MessageFile].self, forKey: .files) ?? []
+        images = try container.decodeIfPresent([MessageImage].self, forKey: .images) ?? []
+        editedAt = try container.decodeIfPresent(Date.self, forKey: .editedAt)
+        isDeleted = try container.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
+        deliveryState = try container.decodeIfPresent(
+            MessageDeliveryState.self,
+            forKey: .deliveryState
+        ) ?? .received
+        thread = try container.decodeIfPresent(
+            MessageThreadMetadata.self,
+            forKey: .thread
+        )
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
 struct Reaction: Codable, Hashable, Sendable {
+    let name: String
     let emoji: String
-    let count: Int
+    var count: Int
+    var userIDs: [String]
+    var isCurrentUserIncluded: Bool
+
+    init(
+        name: String = "",
+        emoji: String,
+        count: Int,
+        userIDs: [String] = [],
+        isCurrentUserIncluded: Bool = false
+    ) {
+        self.name = name
+        self.emoji = emoji
+        self.count = count
+        self.userIDs = userIDs
+        self.isCurrentUserIncluded = isCurrentUserIncluded
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case emoji
+        case count
+        case userIDs
+        case isCurrentUserIncluded
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        emoji = try container.decode(String.self, forKey: .emoji)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? emoji.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+        count = try container.decode(Int.self, forKey: .count)
+        userIDs = try container.decodeIfPresent([String].self, forKey: .userIDs) ?? []
+        isCurrentUserIncluded = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .isCurrentUserIncluded
+        ) ?? false
+    }
 }

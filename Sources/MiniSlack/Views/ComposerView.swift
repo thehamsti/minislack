@@ -1,3 +1,4 @@
+import EmojiText
 import Foundation
 import SwiftUI
 
@@ -8,15 +9,26 @@ struct ComposerView: View {
     @State private var editorHeight: CGFloat = 24
     @State private var selectedSuggestionIndex = 0
     @State private var dismissedQuery: ComposerQuery?
+    @State private var isSchedulePopoverPresented = false
+    @State private var isScheduledMessagesPresented = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         let draft = store.composerDraft
+        let attachmentState = store.attachmentDraftState(for: conversation.id)
         let query = draft.query(at: selection)
-        let suggestions = query.map {
-            store.composerSuggestions(
-                for: $0,
-                allowsBroadcasts: conversation.kind == .channel
-            )
+        let suggestions: [ComposerSuggestion] = query.map { query in
+            if query.kind == .emoji {
+                ComposerSuggestionIndex.emojiMatches(
+                    query: query,
+                    customEmojiURLs: store.customEmojiURLs
+                )
+            } else {
+                store.composerSuggestions(
+                    for: query,
+                    allowsBroadcasts: conversation.kind == .channel
+                )
+            }
         } ?? []
         let suggestionsVisible = query != nil
             && query != dismissedQuery
@@ -25,65 +37,13 @@ struct ComposerView: View {
 
         VStack(spacing: 0) {
             Divider()
-            HStack(alignment: .bottom, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    if draft.text.isEmpty {
-                        Text(
-                            "Message \(conversation.kind == .channel ? "#" : "")\(conversation.title)"
-                        )
-                        .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 3)
-                        .allowsHitTesting(false)
-                    }
-
-                    ComposerTextView(
-                        draft: Binding(
-                            get: { store.composerDraft },
-                            set: { store.composerDraft = $0 }
-                        ),
-                        selection: $selection,
-                        height: $editorHeight,
-                        suggestionsVisible: suggestionsVisible,
-                        accessibilityLabel: "Message \(conversation.title)",
-                        moveSuggestion: { offset in
-                            moveSuggestion(by: offset, count: suggestions.count)
-                        },
-                        acceptSuggestion: {
-                            acceptSuggestion(from: suggestions, query: query)
-                        },
-                        dismissSuggestions: {
-                            dismissedQuery = query
-                        },
-                        send: send
-                    )
-                    .frame(height: editorHeight)
-                }
-
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(
-                    canSend
-                        ? AnyShapeStyle(.orange)
-                        : AnyShapeStyle(.tertiary)
-                )
-                .disabled(!canSend)
-                .help("Send message")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 10)
+            composerCard(
+                draft: draft,
+                attachmentState: attachmentState,
+                query: query,
+                suggestions: suggestions,
+                suggestionsVisible: suggestionsVisible
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(.separator, lineWidth: 0.5)
-            }
-            .padding(10)
         }
         .background(.bar)
         .overlay(alignment: .topLeading) {
@@ -119,9 +79,214 @@ struct ComposerView: View {
         .onChange(of: query) {
             selectedSuggestionIndex = 0
         }
+        .sheet(isPresented: $isScheduledMessagesPresented) {
+            ScheduledMessagesView(store: store, conversation: conversation)
+        }
+    }
+
+    private func composerCard(
+        draft: ComposerDraft,
+        attachmentState: ComposerAttachmentDraftState,
+        query: ComposerQuery?,
+        suggestions: [ComposerSuggestion],
+        suggestionsVisible: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !attachmentState.isEmpty {
+                ComposerAttachmentTray(
+                    state: attachmentState,
+                    remove: {
+                        store.removeComposerAttachment(
+                            $0,
+                            from: conversation.id
+                        )
+                    },
+                    dismissError: {
+                        store.dismissComposerAttachmentError(
+                            for: conversation.id
+                        )
+                    }
+                )
+            }
+            composerControlRow(
+                draft: draft,
+                attachmentState: attachmentState,
+                query: query,
+                suggestions: suggestions,
+                suggestionsVisible: suggestionsVisible
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isDropTargeted
+                        ? Color.orange
+                        : Color(nsColor: .separatorColor),
+                    lineWidth: isDropTargeted ? 1.5 : 0.5
+                )
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !urls.isEmpty else {
+                return false
+            }
+            store.addComposerAttachments(urls, to: conversation.id)
+            return true
+        } isTargeted: {
+            isDropTargeted = $0
+        }
+        .padding(10)
+    }
+
+    private func composerControlRow(
+        draft: ComposerDraft,
+        attachmentState: ComposerAttachmentDraftState,
+        query: ComposerQuery?,
+        suggestions: [ComposerSuggestion],
+        suggestionsVisible: Bool
+    ) -> some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            formattingMenu
+
+            Button(action: chooseFiles) {
+                Image(systemName: "paperclip")
+                    .frame(width: 22, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(attachmentState.isUploading)
+            .help("Attach files")
+
+            composerEditor(
+                draft: draft,
+                query: query,
+                suggestions: suggestions,
+                suggestionsVisible: suggestionsVisible
+            )
+
+            sendButton
+            scheduleButton
+        }
+    }
+
+    private var formattingMenu: some View {
+        Menu {
+            ForEach(ComposerFormatting.allCases) { formatting in
+                Button(formatting.title, systemImage: formatting.systemImage) {
+                    applyFormatting(formatting)
+                }
+            }
+        } label: {
+            Image(systemName: "textformat")
+                .frame(width: 22, height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Format message")
+    }
+
+    private func composerEditor(
+        draft: ComposerDraft,
+        query: ComposerQuery?,
+        suggestions: [ComposerSuggestion],
+        suggestionsVisible: Bool
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(composerPlaceholder)
+                    .font(.body)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 3)
+                    .allowsHitTesting(false)
+            }
+
+            ComposerTextView(
+                draft: Binding(
+                    get: { store.composerDraft },
+                    set: { store.composerDraft = $0 }
+                ),
+                selection: $selection,
+                height: $editorHeight,
+                suggestionsVisible: suggestionsVisible,
+                accessibilityLabel: "Message \(conversation.title)",
+                pasteAttachments: {
+                    store.addComposerPasteboardAttachments(
+                        $0,
+                        to: conversation.id
+                    )
+                },
+                moveSuggestion: { offset in
+                    moveSuggestion(by: offset, count: suggestions.count)
+                },
+                acceptSuggestion: {
+                    acceptSuggestion(from: suggestions, query: query)
+                },
+                dismissSuggestions: {
+                    dismissedQuery = query
+                },
+                format: applyFormatting,
+                send: send
+            )
+            .frame(height: editorHeight)
+        }
+    }
+
+    private var sendButton: some View {
+        Button(action: send) {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.title2)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(
+            canSend
+                ? AnyShapeStyle(.orange)
+                : AnyShapeStyle(.tertiary)
+        )
+        .disabled(!canSend)
+        .help("Send message")
+    }
+
+    private var scheduleButton: some View {
+        Button {
+            isSchedulePopoverPresented.toggle()
+        } label: {
+            Image(systemName: "clock")
+                .frame(width: 18, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Schedule message")
+        .popover(isPresented: $isSchedulePopoverPresented, arrowEdge: .bottom) {
+            ScheduleMessagePopover(
+                store: store,
+                conversationID: conversation.id,
+                canSchedule: canSchedule,
+                scheduled: didScheduleMessage,
+                showScheduledMessages: showScheduledMessages
+            )
+        }
     }
 
     private var canSend: Bool {
+        let hasText = !store.composerDraft.text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        let attachmentState = store.attachmentDraftState(for: conversation.id)
+        return (hasText || !attachmentState.attachments.isEmpty)
+            && !attachmentState.isUploading
+    }
+
+    private var composerPlaceholder: String {
+        let prefix = conversation.kind == .channel ? "#" : ""
+        return "Message \(prefix)\(conversation.title)"
+    }
+
+    private var canSchedule: Bool {
         !store.composerDraft.text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
@@ -157,10 +322,44 @@ struct ComposerView: View {
         guard canSend else {
             return
         }
-        store.sendDraft()
+        let hasAttachments = !store
+            .attachmentDraftState(for: conversation.id)
+            .attachments
+            .isEmpty
+        store.sendComposerDraft()
+        if !hasAttachments {
+            selection = NSRange(location: 0, length: 0)
+        }
+        dismissedQuery = nil
+        selectedSuggestionIndex = 0
+    }
+
+    private func chooseFiles() {
+        Task { @MainActor in
+            let urls = await ComposerAttachmentPicker.chooseFiles()
+            store.addComposerAttachments(urls, to: conversation.id)
+        }
+    }
+
+    private func didScheduleMessage() {
+        isSchedulePopoverPresented = false
         selection = NSRange(location: 0, length: 0)
         dismissedQuery = nil
         selectedSuggestionIndex = 0
+    }
+
+    private func showScheduledMessages() {
+        isSchedulePopoverPresented = false
+        Task { @MainActor in
+            await Task.yield()
+            isScheduledMessagesPresented = true
+        }
+    }
+
+    private func applyFormatting(_ formatting: ComposerFormatting) {
+        var draft = store.composerDraft
+        selection = draft.applyFormatting(formatting, to: selection)
+        store.composerDraft = draft
     }
 
     private func moveCaretToDraftEnd() {
@@ -276,6 +475,28 @@ private struct ComposerSuggestionList: View {
             Image(systemName: "megaphone.fill")
                 .foregroundStyle(.orange)
                 .frame(width: 26)
+        case .emoji:
+            if let url = suggestion.avatarURL {
+                EmojiText(
+                    verbatim: suggestion.displayText,
+                    emojis: [
+                        RemoteEmoji(
+                            shortcode: suggestion.entityID,
+                            url: url
+                        )
+                    ]
+                )
+                .font(.title3)
+                .lineLimit(1)
+                .frame(width: 26, height: 26)
+            } else {
+                Text(
+                    SlackEmojiCatalog.unicode(for: suggestion.entityID)
+                        ?? suggestion.displayText
+                )
+                .font(.title3)
+                .frame(width: 26, height: 26)
+            }
         }
     }
 }

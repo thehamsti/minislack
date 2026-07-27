@@ -27,6 +27,37 @@ struct SidebarView: View {
                         .foregroundStyle(.orange)
                 }
                 .tag(AppStore.Destination.unreadInbox)
+
+                Label {
+                    HStack {
+                        Text("Activity")
+                        Spacer()
+                        if store.unreadActivityCount > 0 {
+                            CountBadge(
+                                count: store.unreadActivityCount,
+                                emphasized: true
+                            )
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "bell.fill")
+                        .foregroundStyle(.orange)
+                }
+                .tag(AppStore.Destination.activity)
+
+                Label {
+                    HStack {
+                        Text("Saved")
+                        Spacer()
+                        if !store.savedMessages.isEmpty {
+                            CountBadge(count: store.savedMessages.count)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "bookmark.fill")
+                        .foregroundStyle(.orange)
+                }
+                .tag(AppStore.Destination.savedMessages)
             }
 
             if !store.unreadConversations.isEmpty {
@@ -86,6 +117,9 @@ struct SidebarView: View {
             KeyboardHint()
         }
         .toolbar {
+            ToolbarItem {
+                ConversationManagementMenu(store: store)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     windowState.presentQuickSwitcher()
@@ -146,12 +180,33 @@ private struct ConversationSidebarRow: View {
 
             Spacer(minLength: 4)
 
+            if store.isConversationMuted(conversation.id) {
+                Image(systemName: "speaker.slash.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Notifications muted")
+            }
+
             if conversation.mentionCount > 0 {
                 CountBadge(count: conversation.mentionCount, emphasized: true)
             } else if highlightsUnread {
                 Circle()
                     .fill(.orange)
                     .frame(width: 6, height: 6)
+            }
+        }
+        .contextMenu {
+            Button {
+                store.toggleConversationMute(conversation.id)
+            } label: {
+                Label(
+                    store.isConversationMuted(conversation.id)
+                        ? "Unmute notifications"
+                        : "Mute notifications",
+                    systemImage: store.isConversationMuted(conversation.id)
+                        ? "speaker.wave.2"
+                        : "speaker.slash"
+                )
             }
         }
     }

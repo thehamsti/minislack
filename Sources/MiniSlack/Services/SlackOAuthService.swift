@@ -43,7 +43,10 @@ actor SlackOAuthService {
         "channels:write",
         "chat:write",
         "dnd:read",
+        "dnd:write",
         "emoji:read",
+        "files:read",
+        "files:write",
         "groups:history",
         "groups:read",
         "groups:write",
@@ -54,7 +57,13 @@ actor SlackOAuthService {
         "mpim:read",
         "mpim:write",
         "reactions:read",
+        "reactions:write",
+        "pins:write",
+        "reminders:write",
+        "search:read",
         "users:read",
+        "users:write",
+        "users.profile:write",
     ]
 
     private let configuration: SlackConfiguration
@@ -145,6 +154,7 @@ actor SlackOAuthService {
 
     private func postTokenRequest(_ parameters: [String: String]) async throws -> SlackOAuthResponse {
         var request = URLRequest(url: URL(string: "https://slack.com/api/oauth.v2.access")!)
+        request.timeoutInterval = 20
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpBody = parameters

@@ -23,56 +23,69 @@ capability parity, not Slack's layout.
 - [x] Workspace custom emoji and aliases
 - [x] User, channel, and broadcast mention resolution
 - [x] Slack links, escaped entities, date fallbacks, and user-group fallbacks
-- [ ] Semantic rich-text blocks, including lists, quotes, code, and styles
-- [ ] Attachments, files, image previews, unfurls, and bot/app messages
-- [ ] Edited/deleted states and message delivery status
+- [x] Semantic rich-text blocks, including lists, quotes, code, and styles
+- [x] Attachments, files, image previews, unfurls, and bot/app messages
+- [x] Edited/deleted states and message delivery status
+- [x] Avatars plus presence, custom status, and DND across user surfaces
 
 ## Conversation and message actions
 
 - [x] Send messages and mark conversations read
 - [x] Conversation-scoped drafts
 - [x] Copy rendered message text
-- [ ] Edit and delete owned messages
-- [ ] Add and remove reactions
-- [ ] Save, pin, remind later, and copy a Slack permalink
-- [ ] Create, join, leave, and manage channels
-- [ ] Start group DMs and manage members
+- [x] Edit and delete owned messages
+- [x] Add and remove reactions
+- [x] Local saved messages, pins, reminders, and Slack permalinks
+- [ ] Slack-synchronized Save Later
+- [x] Create, join, leave, and manage channels
+- [x] Start group DMs and replace participant sets with a new group DM
 
 ## Threads, search, and activity
 
-- [ ] Paginated thread replies with a compact thread pane
-- [ ] Reply counts, participant previews, and followed-thread state
-- [ ] Instant current-conversation find
-- [ ] Offline workspace full-text search
-- [ ] Remote message, file, person, and channel search
-- [ ] Mentions, reactions, and thread activity inbox
+- [x] Paginated thread replies with a compact thread pane
+- [x] Reply counts, participant previews, and followed-thread state
+- [x] Instant current-conversation find
+- [x] Offline workspace full-text search
+- [x] Remote message/file search plus local person/channel search
+- [x] Mentions, reactions, and followed-thread activity inbox
 
 ## Composer and files
 
 - [x] User and channel autocomplete with semantic Slack IDs
-- [ ] Emoji autocomplete
-- [ ] Formatting controls, code blocks, and per-thread drafts
-- [ ] Scheduled messages
-- [ ] File upload, download, Quick Look, drag/drop, and pasted screenshots
+- [x] Emoji autocomplete
+- [x] Formatting controls, code blocks, and per-thread drafts
+- [x] Scheduled messages
+- [x] File upload, download, Quick Look, drag/drop, and pasted screenshots
 
 ## Synchronization and macOS integration
 
-- [ ] Normalized local database for messages, threads, files, reactions, and
-      read cursors
-- [ ] Incremental sync coordinator with Slack-aware rate limiting and retries
-- [ ] Real-time event ingestion with polling fallback
-- [ ] Offline mutation queue and conflict reconciliation
-- [ ] Native notifications, dock badge, mute rules, and DND
-- [ ] Multiple isolated workspaces
-- [ ] Profile, presence, and status editing
+- [x] Normalized local database for messages, thread metadata, files, reactions,
+      read cursors, and full-text search
+- [x] Incremental sync coordinator with Slack-aware rate limiting and retries
+- [x] Rate-aware polling fallback for incremental message updates
+- [x] Per-conversation unread bootstrap from Slack read cursors and bounded history
+- [x] Direct desktop Socket Mode ingestion for self-managed Slack apps
+- [x] Durable offline outgoing-message queue with conservative replay
+- [x] Durable root-message edit/delete queue with conflict reconciliation
+- [ ] Durable queued edit/delete for lazily loaded thread replies
+- [x] Native notifications, dock badge, local mute rules, and DND suppression
+- [x] Multiple saved accounts with safe workspace switching
+- [ ] Simultaneous per-window workspace sessions
+- [x] Current-user custom status, manual presence, and DND editing
 
 ## Platform boundary
 
 Some first-party Slack capabilities are not exposed to third-party clients.
 Literal parity for Huddles, Slack AI, enterprise administration, and arbitrary
 interactions owned by other Slack apps is therefore outside the public API
-boundary. Real-time delivery also requires either
-[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) or a
-hosted Events API service, and
+boundary. Slack's public API also does not expose the current Save Later
+workflow; the legacy
+[`stars.add`](https://docs.slack.dev/reference/methods/stars.add/) API is
+deprecated, so Mini Slack keeps saved messages locally per workspace.
+
+Mini Slack uses direct desktop
+[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) with a
+Keychain-stored app-level token for self-managed Slack apps. Rate-aware polling
+remains active as a recovery path, and
 [`conversations.history`](https://docs.slack.dev/reference/methods/conversations.history/)
 has distribution-dependent rate limits.

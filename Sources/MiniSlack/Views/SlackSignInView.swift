@@ -3,7 +3,16 @@ import SwiftUI
 struct SlackSignInView: View {
     let store: AppStore
 
+    @ViewBuilder
     var body: some View {
+        if store.connectionState == .needsConfiguration {
+            SlackAppSetupView(store: store, onSaved: nil)
+        } else {
+            signInContent
+        }
+    }
+
+    private var signInContent: some View {
         VStack(spacing: 22) {
             ZStack {
                 RoundedRectangle(cornerRadius: 18)
@@ -25,7 +34,21 @@ struct SlackSignInView: View {
 
             stateContent
 
-            Text("Login opens Slack in your browser. Mini Slack never sees your password.")
+            if showsSavedWorkspaces {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Saved workspaces")
+                        .font(.headline)
+                    WorkspaceAccountList(
+                        store: store,
+                        showsRemoveActions: true
+                    )
+                }
+                .padding(12)
+                .frame(maxWidth: 380)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            Text("Login opens Slack securely. Mini Slack never sees your password.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -34,25 +57,25 @@ struct SlackSignInView: View {
         .background(Color(nsColor: .textBackgroundColor))
     }
 
+    private var showsSavedWorkspaces: Bool {
+        guard !store.workspaceAccounts.isEmpty else {
+            return false
+        }
+        return switch store.connectionState {
+        case .disconnected, .failed:
+            true
+        default:
+            false
+        }
+    }
+
     @ViewBuilder
     private var stateContent: some View {
         switch store.connectionState {
-        case .needsConfiguration:
-            VStack(spacing: 8) {
-                Label("Slack app setup required", systemImage: "wrench.and.screwdriver")
-                    .font(.headline)
-                Text("Add SlackClientID to Config/MiniSlack-Info.plist, then rebuild the app.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            .padding(16)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-
         case .authorizing:
             VStack(spacing: 10) {
                 ProgressView()
-                Text("Finish signing in with Slack in your browser")
+                Text("Finish signing in with Slack in the login window")
                     .font(.headline)
                 HStack {
                     Button("Cancel") {
@@ -60,12 +83,6 @@ struct SlackSignInView: View {
                             await store.cancelSlackSignIn()
                         }
                     }
-                    Button("Open Slack again") {
-                        Task {
-                            await store.signInWithSlack()
-                        }
-                    }
-                    .buttonStyle(.link)
                 }
             }
 
@@ -97,19 +114,24 @@ struct SlackSignInView: View {
                 }
             }
 
-        default:
-            Button {
-                Task {
-                    await store.signInWithSlack()
+        case .needsConfiguration, .preview, .disconnected, .connected:
+            VStack(spacing: 10) {
+                Button {
+                    Task {
+                        await store.signInWithSlack()
+                    }
+                } label: {
+                    Label("Continue with Slack", systemImage: "arrow.up.right.square")
+                        .font(.headline)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
                 }
-            } label: {
-                Label("Continue with Slack", systemImage: "arrow.up.right.square")
-                    .font(.headline)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                Text("Slack opens to authorize the user scopes from the manifest.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
     }
 }

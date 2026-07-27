@@ -17,7 +17,10 @@ let package = Package(
             dependencies: [
                 .product(name: "EmojiText", package: "EmojiText")
             ],
-            path: "Sources/MiniSlack"
+            path: "Sources/MiniSlack",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .testTarget(
             name: "MiniSlackTests",

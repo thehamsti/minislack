@@ -71,6 +71,8 @@ private struct UnreadHeader: View {
             Spacer()
 
             if compact {
+                ConversationManagementMenu(store: store)
+
                 Button {
                     windowState.presentQuickSwitcher()
                 } label: {
@@ -131,10 +133,24 @@ private struct UnreadCard: View {
                             ?? message.authorUserID.map { _ in UserAvailability() }
                     )
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(message.displayBody)
+                        HStack(spacing: 5) {
+                            Text(displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            if let integration = message.integration {
+                                MessageIntegrationBadge(integration: integration)
+                            }
+                        }
+                        Group {
+                            if let richText = message.richText {
+                                MessageRichTextView(
+                                    document: richText,
+                                    customEmojiURLs: store.customEmojiURLs
+                                )
+                            } else {
+                                Text(message.compactPreviewText)
+                            }
+                        }
                             .font(.callout)
                             .foregroundStyle(.primary)
                             .lineLimit(compact ? 2 : 3)

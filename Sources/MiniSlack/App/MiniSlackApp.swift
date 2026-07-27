@@ -7,7 +7,7 @@ struct MiniSlackApp: App {
     @State private var store = AppStore.live()
 
     var body: some Scene {
-        WindowGroup("Mini Slack", id: "main") {
+        Window("Mini Slack", id: "main") {
             MiniSlackWindow(store: store)
         }
         .defaultSize(width: 940, height: 680)
@@ -28,6 +28,10 @@ private struct MiniSlackWindow: View {
 
     var body: some View {
         ContentView(store: store, windowState: windowState)
+            .background {
+                MainWindowIdentityView()
+                    .frame(width: 0, height: 0)
+            }
             .focusedSceneValue(
                 \.navigationCommandActions,
                 NavigationCommandActions(
@@ -49,6 +53,7 @@ private struct MiniSlackWindow: View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MacNotificationService.shared.configure()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }

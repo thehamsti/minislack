@@ -4,6 +4,24 @@ import Testing
 
 struct ComposerDraftTests {
     @Test
+    func formattingWrapsSelectionsAndPlacesEmptyCaretsInsideDelimiters() {
+        var draft = ComposerDraft(text: "ship it")
+
+        let boldSelection = draft.applyFormatting(
+            .bold,
+            to: NSRange(location: 0, length: 4)
+        )
+        let codeCaret = draft.applyFormatting(
+            .codeBlock,
+            to: NSRange(location: (draft.text as NSString).length, length: 0)
+        )
+
+        #expect(draft.text == "*ship* it```\n\n```")
+        #expect(boldSelection == NSRange(location: 0, length: 6))
+        #expect(codeCaret.location == ("*ship* it```\n" as NSString).length)
+    }
+
+    @Test
     func detectsUserAndChannelQueriesAtTheCaret() throws {
         let userDraft = ComposerDraft(text: "Ask @maya today")
         let userQuery = try #require(
@@ -32,6 +50,54 @@ struct ComposerDraftTests {
         )
         #expect(channelQuery.kind == .channel)
         #expect(channelQuery.term == "clientcredentials")
+    }
+
+    @Test
+    func detectsEmojiQueriesWithoutTreatingTimesOrURLsAsQueries() throws {
+        let draft = ComposerDraft(text: "Ship :roc today")
+        let query = try #require(
+            draft.query(
+                at: NSRange(
+                    location: ("Ship :roc" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        #expect(query.kind == .emoji)
+        #expect(query.term == "roc")
+        #expect(
+            (draft.text as NSString).substring(with: query.range) == ":roc"
+        )
+
+        for text in ["Meet at 12:30", "https://example.com"] {
+            let literal = ComposerDraft(text: text)
+            #expect(
+                literal.query(
+                    at: NSRange(
+                        location: (text as NSString).length,
+                        length: 0
+                    )
+                ) == nil
+            )
+        }
+    }
+
+    @Test
+    func emojiQueryReplacesAnExistingClosingColon() throws {
+        let draft = ComposerDraft(text: "Ship :rock: today")
+        let query = try #require(
+            draft.query(
+                at: NSRange(
+                    location: ("Ship :rock" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        #expect(
+            (draft.text as NSString).substring(with: query.range) == ":rock:"
+        )
     }
 
     @Test
@@ -187,6 +253,102 @@ struct ComposerDraftTests {
         )
 
         #expect(draft.slackText == "<@U2> ")
+    }
+
+    @Test
+    func insertsEmojiAsSlackShortcodes() throws {
+        var draft = ComposerDraft(text: "Ship :rocke")
+        let query = try #require(
+            draft.query(
+                at: NSRange(
+                    location: (draft.text as NSString).length,
+                    length: 0
+                )
+            )
+        )
+        let suggestion = try #require(
+            ComposerSuggestionIndex.emojiMatches(
+                query: query,
+                customEmojiURLs: [:]
+            ).first
+        )
+        _ = draft.insert(suggestion: suggestion, replacing: query)
+
+        #expect(draft.text == "Ship :rocket: ")
+        #expect(draft.slackText == "Ship :rocket: ")
+    }
+
+    @Test
+    func emojiSuggestionsIncludeStandardAliasesAndWorkspaceEmoji() throws {
+        let customURL = try #require(
+            URL(string: "https://emoji.slack-edge.com/T1/party_parrot.png")
+        )
+        let customQuery = ComposerQuery(
+            kind: .emoji,
+            term: "party",
+            range: NSRange(location: 0, length: 6)
+        )
+        let standardQuery = ComposerQuery(
+            kind: .emoji,
+            term: "+1",
+            range: NSRange(location: 0, length: 3)
+        )
+
+        let custom = ComposerSuggestionIndex.emojiMatches(
+            query: customQuery,
+            customEmojiURLs: ["party_parrot": customURL]
+        )
+        let standard = ComposerSuggestionIndex.emojiMatches(
+            query: standardQuery,
+            customEmojiURLs: [:]
+        )
+
+        #expect(custom.first?.entityID == "party_parrot")
+        #expect(custom.first?.avatarURL == customURL)
+        #expect(custom.first?.displayText == ":party_parrot:")
+        #expect(standard.first?.entityID == "+1")
+        #expect(standard.first?.displayText == ":+1:")
+
+        var draft = ComposerDraft(text: "Dance :party")
+        let query = try #require(
+            draft.query(
+                at: NSRange(
+                    location: (draft.text as NSString).length,
+                    length: 0
+                )
+            )
+        )
+        let customSuggestion = try #require(
+            ComposerSuggestionIndex.emojiMatches(
+                query: query,
+                customEmojiURLs: ["party_parrot": customURL]
+            ).first
+        )
+        _ = draft.insert(suggestion: customSuggestion, replacing: query)
+
+        #expect(draft.slackText == "Dance :party_parrot: ")
+    }
+
+    @Test
+    func emojiSuggestionsAreBoundedAndOfferUsefulDefaults() {
+        let query = ComposerQuery(
+            kind: .emoji,
+            term: "",
+            range: NSRange(location: 0, length: 1)
+        )
+
+        let suggestions = ComposerSuggestionIndex.emojiMatches(
+            query: query,
+            customEmojiURLs: [:],
+            limit: 4
+        )
+
+        #expect(suggestions.map(\.entityID) == [
+            "thumbsup",
+            "heart",
+            "joy",
+            "tada",
+        ])
     }
 
     @Test

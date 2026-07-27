@@ -10,9 +10,13 @@ struct Conversation: Identifiable, Hashable, Sendable {
     let id: String
     var title: String
     let kind: ConversationKind
-    let subtitle: String?
+    var isPrivate: Bool = false
+    var subtitle: String?
     let isFavorite: Bool
     var createdAt: Date = .distantPast
+    var topic: String? = nil
+    var purpose: String? = nil
+    var isArchived = false
     var participantUserID: String? = nil
     var avatarURL: URL? = nil
     var participants: [WorkspaceUser] = []
@@ -28,7 +32,7 @@ struct Conversation: Identifiable, Hashable, Sendable {
     var systemImage: String {
         switch kind {
         case .channel:
-            "number"
+            isPrivate ? "lock.fill" : "number"
         case .directMessage:
             "person.crop.circle.fill"
         case .groupDirectMessage:

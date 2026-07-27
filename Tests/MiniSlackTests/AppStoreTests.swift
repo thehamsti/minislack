@@ -190,6 +190,12 @@ struct AppStoreTests {
         #expect(store.quickSwitcherSelection == .unreads)
 
         store.moveQuickSwitcherSelection(offset: 1)
+        #expect(store.quickSwitcherSelection == .activity)
+
+        store.moveQuickSwitcherSelection(offset: 1)
+        #expect(store.quickSwitcherSelection == .saved)
+
+        store.moveQuickSwitcherSelection(offset: 1)
         #expect(store.quickSwitcherSelection == .user(user.id))
 
         store.moveQuickSwitcherSelection(offset: 1)

@@ -1,12 +1,13 @@
 import Foundation
 
-enum ComposerTagKind: Hashable {
+enum ComposerTagKind: Hashable, Sendable {
     case user
     case channel
     case broadcast
+    case emoji
 }
 
-struct ComposerTag: Hashable {
+struct ComposerTag: Hashable, Sendable {
     let kind: ComposerTagKind
     let entityID: String
     let displayText: String
@@ -20,14 +21,17 @@ struct ComposerTag: Hashable {
             "<#\(entityID)>"
         case .broadcast:
             "<!\(entityID)>"
+        case .emoji:
+            ":\(entityID):"
         }
     }
 }
 
-struct ComposerQuery: Equatable, Hashable {
-    enum Kind: Hashable {
+struct ComposerQuery: Equatable, Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
         case user
         case channel
+        case emoji
     }
 
     let kind: Kind
@@ -35,7 +39,7 @@ struct ComposerQuery: Equatable, Hashable {
     let range: NSRange
 }
 
-struct ComposerDraft: Equatable {
+struct ComposerDraft: Equatable, Sendable {
     var text: String
     private(set) var tags: [ComposerTag]
 
@@ -111,6 +115,40 @@ struct ComposerDraft: Equatable {
     }
 
     @discardableResult
+    mutating func applyFormatting(
+        _ formatting: ComposerFormatting,
+        to selection: NSRange
+    ) -> NSRange {
+        let source = text as NSString
+        guard selection.location != NSNotFound,
+              NSMaxRange(selection) <= source.length
+        else {
+            return selection
+        }
+        let delimiters = formatting.delimiters
+        replaceCharacters(
+            in: NSRange(location: NSMaxRange(selection), length: 0),
+            with: delimiters.suffix
+        )
+        replaceCharacters(
+            in: NSRange(location: selection.location, length: 0),
+            with: delimiters.prefix
+        )
+        if selection.length == 0 {
+            return NSRange(
+                location: selection.location + (delimiters.prefix as NSString).length,
+                length: 0
+            )
+        }
+        return NSRange(
+            location: selection.location,
+            length: selection.length
+                + (delimiters.prefix as NSString).length
+                + (delimiters.suffix as NSString).length
+        )
+    }
+
+    @discardableResult
     mutating func insert(
         suggestion: ComposerSuggestion,
         replacing query: ComposerQuery
@@ -157,18 +195,35 @@ struct ComposerDraft: Equatable {
         var location = selection.location
         while location > 0 {
             let scalar = source.character(at: location - 1)
-            if scalar == 64 || scalar == 35 {
+            if scalar == 64 || scalar == 35 || scalar == 58 {
                 let triggerLocation = location - 1
-                guard isTriggerBoundary(source, location: triggerLocation) else {
+                guard isTriggerBoundary(
+                    source,
+                    location: triggerLocation,
+                    trigger: scalar
+                ) else {
                     return nil
                 }
-                let kind: ComposerQuery.Kind = scalar == 64 ? .user : .channel
+                let kind: ComposerQuery.Kind
+                switch scalar {
+                case 64:
+                    kind = .user
+                case 35:
+                    kind = .channel
+                default:
+                    kind = .emoji
+                }
                 var queryEnd = selection.location
                 while queryEnd < source.length,
                       isQueryCharacter(source.character(at: queryEnd))
                 {
                     queryEnd += 1
                 }
+                let replacementEnd = kind == .emoji
+                    && queryEnd < source.length
+                    && source.character(at: queryEnd) == 58
+                    ? queryEnd + 1
+                    : queryEnd
                 return ComposerQuery(
                     kind: kind,
                     term: source.substring(
@@ -179,7 +234,7 @@ struct ComposerDraft: Equatable {
                     ),
                     range: NSRange(
                         location: triggerLocation,
-                        length: queryEnd - triggerLocation
+                        length: replacementEnd - triggerLocation
                     )
                 )
             }
@@ -217,11 +272,18 @@ struct ComposerDraft: Equatable {
         }
     }
 
-    private func isTriggerBoundary(_ source: NSString, location: Int) -> Bool {
+    private func isTriggerBoundary(
+        _ source: NSString,
+        location: Int,
+        trigger: unichar
+    ) -> Bool {
         guard location > 0 else {
             return true
         }
         let scalar = source.character(at: location - 1)
+        if trigger == 58, scalar == 58 {
+            return false
+        }
         guard let unicodeScalar = UnicodeScalar(scalar) else {
             return false
         }
@@ -234,7 +296,7 @@ struct ComposerDraft: Equatable {
             return true
         }
         return CharacterSet.alphanumerics.contains(unicodeScalar)
-            || CharacterSet(charactersIn: "-_.'").contains(unicodeScalar)
+            || CharacterSet(charactersIn: "+-_.'").contains(unicodeScalar)
     }
 
     private static func escape(_ text: String) -> String {
@@ -242,6 +304,63 @@ struct ComposerDraft: Equatable {
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+    }
+}
+
+enum ComposerFormatting: String, CaseIterable, Identifiable, Sendable {
+    case bold
+    case italic
+    case strikethrough
+    case inlineCode
+    case codeBlock
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .bold:
+            "Bold"
+        case .italic:
+            "Italic"
+        case .strikethrough:
+            "Strikethrough"
+        case .inlineCode:
+            "Inline code"
+        case .codeBlock:
+            "Code block"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .bold:
+            "bold"
+        case .italic:
+            "italic"
+        case .strikethrough:
+            "strikethrough"
+        case .inlineCode:
+            "chevron.left.forwardslash.chevron.right"
+        case .codeBlock:
+            "text.rectangle"
+        }
+    }
+
+    fileprivate var delimiters: (prefix: String, suffix: String) {
+        switch self {
+        case .bold:
+            ("*", "*")
+        case .italic:
+            ("_", "_")
+        case .strikethrough:
+            ("~", "~")
+        case .inlineCode:
+            ("`", "`")
+        case .codeBlock:
+            ("```\n", "\n```")
+        }
     }
 }
 
@@ -319,6 +438,41 @@ struct ComposerSuggestionIndex {
                 candidates: channels,
                 limit: limit
             )
+        case .emoji:
+            Self.emojiMatches(query: query, customEmojiURLs: [:], limit: limit)
+        }
+    }
+
+    static func emojiMatches(
+        query: ComposerQuery,
+        customEmojiURLs: [String: URL],
+        limit: Int = 8
+    ) -> [ComposerSuggestion] {
+        guard query.kind == .emoji, limit > 0 else {
+            return []
+        }
+
+        let names: [(name: String, url: URL?)]
+        if query.term.isEmpty {
+            names = commonEmojiShortcodes.prefix(limit).map { ($0, nil) }
+        } else {
+            names = rankedEmojiNames(
+                term: query.term,
+                customEmojiURLs: customEmojiURLs,
+                limit: limit
+            )
+        }
+
+        return names.map { name, url in
+            ComposerSuggestion(
+                tagKind: .emoji,
+                entityID: name,
+                displayText: ":\(name):",
+                title: ":\(name):",
+                subtitle: url == nil ? "Emoji" : "Workspace emoji",
+                avatarURL: url,
+                isActive: false
+            )
         }
     }
 
@@ -382,10 +536,63 @@ struct ComposerSuggestionIndex {
         return Array((prefixMatches + containsMatches).prefix(limit))
     }
 
+    private static func rankedEmojiNames(
+        term: String,
+        customEmojiURLs: [String: URL],
+        limit: Int
+    ) -> [(name: String, url: URL?)] {
+        let searchTerm = term.lowercased()
+        var exactMatch: (name: String, url: URL?)?
+        var prefixMatches: [(name: String, url: URL?)] = []
+        var containsMatches: [(name: String, url: URL?)] = []
+
+        func collect(name: String, searchKey: String, url: URL?) {
+            if searchKey == searchTerm {
+                exactMatch = (name, url)
+            } else if searchKey.hasPrefix(searchTerm) {
+                if prefixMatches.count < limit {
+                    prefixMatches.append((name, url))
+                }
+            } else if searchKey.contains(searchTerm),
+                      containsMatches.count < limit
+            {
+                containsMatches.append((name, url))
+            }
+        }
+
+        let customNames = customEmojiURLs.keys.sorted()
+        for name in customNames {
+            collect(
+                name: name,
+                searchKey: name.lowercased(),
+                url: customEmojiURLs[name]
+            )
+        }
+        for name in SlackEmojiCatalog.shortcodes where customEmojiURLs[name] == nil {
+            collect(name: name, searchKey: name, url: nil)
+        }
+
+        return Array(
+            ([exactMatch].compactMap(\.self) + prefixMatches + containsMatches)
+                .prefix(limit)
+        )
+    }
+
     private static func normalized(_ text: String) -> String {
         text.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: .current
         )
     }
+
+    private static let commonEmojiShortcodes = [
+        "thumbsup",
+        "heart",
+        "joy",
+        "tada",
+        "fire",
+        "eyes",
+        "white_check_mark",
+        "rocket",
+    ]
 }

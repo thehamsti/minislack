@@ -37,13 +37,31 @@ const lines = [
   "// Regenerate with script/generate_slack_emoji_catalog.ts.",
   "",
   "enum SlackEmojiCatalog {",
-  "    static func unicode(for shortcode: String, skinTone: Int? = nil) -> String? {",
-  "        switch shortcode {",
 ];
 
-for (const record of records.sort((left, right) =>
+const sortedRecords = records.sort((left, right) =>
   left.short_names[0].localeCompare(right.short_names[0]),
-)) {
+);
+const shortcodes = [
+  ...new Set(sortedRecords.flatMap((record) => record.short_names)),
+];
+lines.push("    static let shortcodes: [String] = [");
+for (let index = 0; index < shortcodes.length; index += 8) {
+  lines.push(
+    `        ${shortcodes
+      .slice(index, index + 8)
+      .map((shortcode) => JSON.stringify(shortcode))
+      .join(", ")},`,
+  );
+}
+lines.push(
+  "    ]",
+  "",
+  "    static func unicode(for shortcode: String, skinTone: Int? = nil) -> String? {",
+  "        switch shortcode {",
+);
+
+for (const record of sortedRecords) {
   const aliases = record.short_names
     .map((alias) => JSON.stringify(alias))
     .join(", ");

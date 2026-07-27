@@ -23,6 +23,21 @@ struct SlackIntegrationTests {
     }
 
     @Test
+    func mainAppSceneIsSingleInstance() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSource = try String(
+            contentsOf: projectRoot.appending(path: "Sources/MiniSlack/App/MiniSlackApp.swift"),
+            encoding: .utf8
+        )
+
+        #expect(appSource.contains(#"Window("Mini Slack", id: "main")"#))
+        #expect(!appSource.contains(#"WindowGroup("Mini Slack", id: "main")"#))
+    }
+
+    @Test
     func authorizationURLUsesPKCEAndOnlyUserScopes() async throws {
         let service = SlackOAuthService(
             configuration: SlackConfiguration(clientID: "123.456")
@@ -42,7 +57,13 @@ struct SlackIntegrationTests {
         #expect(query["client_secret"] == nil)
         #expect(query["user_scope"]?.contains("channels:read") == true)
         #expect(query["user_scope"]?.contains("dnd:read") == true)
+        #expect(query["user_scope"]?.contains("dnd:write") == true)
         #expect(query["user_scope"]?.contains("emoji:read") == true)
+        #expect(query["user_scope"]?.contains("files:write") == true)
+        #expect(query["user_scope"]?.contains("reactions:write") == true)
+        #expect(query["user_scope"]?.contains("search:read") == true)
+        #expect(query["user_scope"]?.contains("users.profile:write") == true)
+        #expect(query["user_scope"]?.contains("users:write") == true)
     }
 
     @Test
@@ -138,6 +159,69 @@ struct SlackIntegrationTests {
         #expect(snapshot.conversations.first?.messages.first?.body == "Hello from Slack")
         #expect(snapshot.conversations.first?.messages.first?.authorUserID == "U1")
         #expect(snapshot.conversations.first?.messages.first?.authorAvatarURL == snapshot.users.first?.avatarURL)
+    }
+
+    @Test
+    func slackMessagesDecodeEditsThreadsPinsReactionsAndDeletion() throws {
+        let json = """
+        {
+          "ts": "1700000100.000000",
+          "user": "ME",
+          "text": "Updated",
+          "edited": {"user": "ME", "ts": "1700000200.000000"},
+          "reply_count": 3,
+          "reply_users": ["U1", "U2"],
+          "latest_reply": "1700000300.000000",
+          "subscribed": true,
+          "pinned_to": ["C1"],
+          "reactions": [{
+            "name": "eyes",
+            "count": 2,
+            "users": ["ME", "U1"]
+          }]
+        }
+        """
+        let dto = try JSONDecoder().decode(
+            SlackMessageDTO.self,
+            from: Data(json.utf8)
+        )
+        let message = dto.message(
+            users: [
+                "ME": WorkspaceUser(
+                    id: "ME",
+                    displayName: "You",
+                    status: "",
+                    isActive: true
+                )
+            ],
+            currentUserID: "ME"
+        )
+
+        #expect(message.isCurrentUser)
+        #expect(message.editedAt == Date(timeIntervalSince1970: 1_700_000_200))
+        #expect(message.isPinned)
+        #expect(message.thread?.rootTimestamp == "1700000100.000000")
+        #expect(message.thread?.replyCount == 3)
+        #expect(message.thread?.replyUserIDs == ["U1", "U2"])
+        #expect(message.thread?.isFollowing == true)
+        #expect(message.reactions.first?.name == "eyes")
+        #expect(message.reactions.first?.isCurrentUserIncluded == true)
+
+        let deletedDTO = try JSONDecoder().decode(
+            SlackMessageDTO.self,
+            from: Data(
+                """
+                {
+                  "ts": "1700000400.000000",
+                  "subtype": "tombstone",
+                  "text": ""
+                }
+                """.utf8
+            )
+        )
+        let deleted = deletedDTO.message(users: [:], currentUserID: "ME")
+        #expect(deleted.isDeleted)
+        #expect(deleted.displayBody == "This message was deleted.")
     }
 
     @Test
@@ -299,7 +383,7 @@ struct SlackIntegrationTests {
     }
 
     @Test
-    func conversationInfoProvidesCreationAndLatestActivitySortingDates() throws {
+    func workspaceSnapshotProvidesCreationAndLatestActivitySortingDates() throws {
         let json = """
         {
           "id": "C1",
@@ -318,11 +402,71 @@ struct SlackIntegrationTests {
             from: Data(json.utf8)
         )
 
-        let metadata = SlackAPIClient.makeMetadata(from: conversation)
+        let snapshot = SlackAPIClient.makeSnapshot(
+            users: [],
+            conversations: [conversation]
+        )
+        let mapped = try #require(snapshot.conversations.first)
 
-        #expect(metadata.conversationID == "C1")
-        #expect(metadata.createdAt == Date(timeIntervalSince1970: 1_600_000_000))
-        #expect(metadata.latestActivity == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(mapped.id == "C1")
+        #expect(mapped.createdAt == Date(timeIntervalSince1970: 1_600_000_000))
+        #expect(mapped.latestActivity == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(
+            snapshot.readCursorsByConversationID["C1"]
+                == MessageHistoryReadCursor(
+                    remoteID: "1690000000.000000",
+                    timestamp: Date(timeIntervalSince1970: 1_690_000_000)
+                )
+        )
+        #expect(
+            !snapshot.conversationsWithAuthoritativeUnreadCounts.contains("C1")
+        )
+    }
+
+    @Test
+    func conversationInfoProvidesReadStateWithoutInventingChannelUnreadCount() async throws {
+        let token = "read-state-\(UUID().uuidString)"
+        let client = makeStubbedSlackClient(accessToken: token) { request in
+            let components = try #require(
+                URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            )
+            let query = Dictionary(
+                uniqueKeysWithValues: (components.queryItems ?? []).map {
+                    ($0.name, $0.value ?? "")
+                }
+            )
+            #expect(components.path == "/api/conversations.info")
+            #expect(query["channel"] == "C1")
+            #expect(query["include_num_members"] == "false")
+            return try slackResponse(
+                for: request,
+                json: """
+                {
+                  "ok": true,
+                  "channel": {
+                    "id": "C1",
+                    "name": "general",
+                    "last_read": "1700000000.000000"
+                  }
+                }
+                """
+            )
+        }
+        defer { SlackStubURLProtocol.unregister(accessToken: token) }
+
+        let state = try await client.fetchConversationReadState(
+            channelID: "C1",
+            accessToken: token
+        )
+
+        #expect(
+            state.readCursor
+                == MessageHistoryReadCursor(
+                    remoteID: "1700000000.000000",
+                    timestamp: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+        )
+        #expect(state.unreadCount == nil)
     }
 
     @Test
@@ -389,6 +533,7 @@ struct SlackIntegrationTests {
         [
           {
             "id": "U0",
+            "name": "current.user",
             "real_name": "Current User",
             "deleted": false,
             "is_bot": false,
@@ -400,6 +545,7 @@ struct SlackIntegrationTests {
           },
           {
             "id": "U1",
+            "name": "maya",
             "real_name": "Maya Chen",
             "deleted": false,
             "is_bot": false,
@@ -412,6 +558,7 @@ struct SlackIntegrationTests {
           },
           {
             "id": "U2",
+            "name": "alex",
             "real_name": "Alex Morgan",
             "deleted": false,
             "is_bot": false,
@@ -424,6 +571,7 @@ struct SlackIntegrationTests {
           },
           {
             "id": "U3",
+            "name": "former.teammate",
             "real_name": "Former Teammate",
             "deleted": true,
             "is_bot": false,
@@ -439,10 +587,9 @@ struct SlackIntegrationTests {
         [
           {
             "id": "G1",
-            "name": "mpdm-current.user--maya--alex-1",
+            "name": "mpdm-current.user--maya--alex--former.teammate-1",
             "is_im": false,
             "is_mpim": false,
-            "members": ["U0", "U1", "U2", "U3"],
             "is_starred": false,
             "unread_count_display": 1
           }
