@@ -13,6 +13,9 @@ struct ComposerView: View {
     @State private var isSchedulePopoverPresented = false
     @State private var isScheduledMessagesPresented = false
     @State private var isDropTargeted = false
+    @State private var isEditorFocused = false
+    @State private var isFormattingHovered = false
+    @State private var isSendHovered = false
 
     var body: some View {
         let draft = store.composerDraft
@@ -128,9 +131,12 @@ struct ComposerView: View {
                 .stroke(
                     isDropTargeted
                         ? Color.orange
-                        : Color(nsColor: .separatorColor),
+                        : isEditorFocused
+                            ? Color.primary.opacity(0.3)
+                            : Color(nsColor: .separatorColor),
                     lineWidth: isDropTargeted ? 1.5 : 0.5
                 )
+                .animation(.easeInOut(duration: 0.15), value: isEditorFocused)
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard !urls.isEmpty else {
@@ -151,17 +157,17 @@ struct ComposerView: View {
         suggestions: [ComposerSuggestion],
         suggestionsVisible: Bool
     ) -> some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            formattingMenu
+        HStack(alignment: .bottom, spacing: 6) {
+            HStack(spacing: 2) {
+                formattingMenu
 
-            Button(action: chooseFiles) {
-                Image(systemName: "paperclip")
-                    .frame(width: 22, height: 24)
+                ComposerIconButton(
+                    systemImage: "paperclip",
+                    help: "Attach files",
+                    isEnabled: !attachmentState.isUploading,
+                    action: chooseFiles
+                )
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .disabled(attachmentState.isUploading)
-            .help("Attach files")
 
             composerEditor(
                 draft: draft,
@@ -170,8 +176,10 @@ struct ComposerView: View {
                 suggestionsVisible: suggestionsVisible
             )
 
-            sendButton
-            scheduleButton
+            HStack(spacing: 2) {
+                scheduleButton
+                sendButton
+            }
         }
     }
 
@@ -184,11 +192,25 @@ struct ComposerView: View {
             }
         } label: {
             Image(systemName: "textformat")
-                .frame(width: 22, height: 24)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Color.primary.opacity(isFormattingHovered ? 0.08 : 0),
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isFormattingHovered = hovering
+            }
+        }
         .help("Format message")
+        .accessibilityLabel("Format message")
     }
 
     private func composerEditor(
@@ -203,6 +225,7 @@ struct ComposerView: View {
                     .font(.body)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 3)
+                    .padding(.leading, 5)
                     .allowsHitTesting(false)
             }
 
@@ -232,7 +255,8 @@ struct ComposerView: View {
                 },
                 format: applyFormatting,
                 send: send,
-                onEscape: onEscape
+                onEscape: onEscape,
+                focusChanged: { isEditorFocused = $0 }
             )
             .frame(height: editorHeight)
         }
@@ -241,28 +265,34 @@ struct ComposerView: View {
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up.circle.fill")
-                .font(.title2)
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(
+                    canSend
+                        ? AnyShapeStyle(.orange)
+                        : AnyShapeStyle(.tertiary)
+                )
+                .frame(width: 28, height: 28)
+                .opacity(isSendHovered && canSend ? 0.8 : 1)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(
-            canSend
-                ? AnyShapeStyle(.orange)
-                : AnyShapeStyle(.tertiary)
-        )
         .disabled(!canSend)
-        .help("Send message")
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isSendHovered = hovering
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: canSend)
+        .help(canSend ? "Send message (↩)" : "Type a message to send")
+        .accessibilityLabel("Send message")
     }
 
     private var scheduleButton: some View {
-        Button {
+        ComposerIconButton(
+            systemImage: "clock",
+            help: "Schedule message"
+        ) {
             isSchedulePopoverPresented.toggle()
-        } label: {
-            Image(systemName: "clock")
-                .frame(width: 18, height: 24)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help("Schedule message")
         .popover(isPresented: $isSchedulePopoverPresented, arrowEdge: .bottom) {
             ScheduleMessagePopover(
                 store: store,
@@ -369,6 +399,40 @@ struct ComposerView: View {
             location: (store.composerDraft.text as NSString).length,
             length: 0
         )
+    }
+}
+
+/// Uniform 28×28 hit target shared by every secondary composer action so
+/// the whole control row stays optically aligned.
+private struct ComposerIconButton: View {
+    let systemImage: String
+    let help: String
+    var isEnabled = true
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isEnabled ? .secondary : .tertiary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Color.primary.opacity(isHovered && isEnabled ? 0.08 : 0),
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+        .help(help)
+        .accessibilityLabel(help)
     }
 }
 

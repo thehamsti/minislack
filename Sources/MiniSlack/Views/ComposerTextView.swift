@@ -14,6 +14,7 @@ struct ComposerTextView: NSViewRepresentable {
     let format: (ComposerFormatting) -> Void
     let send: () -> Void
     let onEscape: (() -> Void)?
+    let focusChanged: ((Bool) -> Void)?
 
     init(
         draft: Binding<ComposerDraft>,
@@ -27,7 +28,8 @@ struct ComposerTextView: NSViewRepresentable {
         dismissSuggestions: @escaping () -> Void,
         format: @escaping (ComposerFormatting) -> Void,
         send: @escaping () -> Void,
-        onEscape: (() -> Void)? = nil
+        onEscape: (() -> Void)? = nil,
+        focusChanged: ((Bool) -> Void)? = nil
     ) {
         _draft = draft
         _selection = selection
@@ -41,6 +43,7 @@ struct ComposerTextView: NSViewRepresentable {
         self.format = format
         self.send = send
         self.onEscape = onEscape
+        self.focusChanged = focusChanged
     }
 
     func makeCoordinator() -> Coordinator {
@@ -184,6 +187,14 @@ struct ComposerTextView: NSViewRepresentable {
                 return
             }
             parent.selection = textView.selectedRange()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            parent.focusChanged?(true)
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            parent.focusChanged?(false)
         }
 
         func applyTagAttributes(to textView: NSTextView) {
