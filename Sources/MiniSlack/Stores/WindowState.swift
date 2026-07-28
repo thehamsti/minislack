@@ -5,7 +5,16 @@ import Observation
 final class WindowState {
     var isQuickSwitcherPresented = false
     var isWorkspaceSearchPresented = false
+    var isUnreadNotificationsPresented = false
     var selectedThread: ThreadIdentifier?
+
+    func toggleUnreadNotifications() {
+        isUnreadNotificationsPresented.toggle()
+    }
+
+    func dismissUnreadNotifications() {
+        isUnreadNotificationsPresented = false
+    }
 
     func presentQuickSwitcher() {
         isWorkspaceSearchPresented = false

@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 
 struct KeyboardNavigationMonitor: NSViewRepresentable {
+    let settings: KeyboardShortcutSettings
     let onAction: (KeyboardNavigationAction) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onAction: onAction)
+        Coordinator(settings: settings, onAction: onAction)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -14,6 +15,7 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.settings = settings
         context.coordinator.onAction = onAction
     }
 
@@ -23,10 +25,15 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
+        var settings: KeyboardShortcutSettings
         var onAction: (KeyboardNavigationAction) -> Void
         private var monitor: Any?
 
-        init(onAction: @escaping (KeyboardNavigationAction) -> Void) {
+        init(
+            settings: KeyboardShortcutSettings,
+            onAction: @escaping (KeyboardNavigationAction) -> Void
+        ) {
+            self.settings = settings
             self.onAction = onAction
         }
 
@@ -34,7 +41,7 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self,
                       !Self.isEditingText(in: event.window),
-                      let action = Self.action(for: event)
+                      let action = Self.action(for: event, settings: settings)
                 else {
                     return event
                 }
@@ -58,7 +65,10 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
             return textView.isEditable
         }
 
-        private static func action(for event: NSEvent) -> KeyboardNavigationAction? {
+        private static func action(
+            for event: NSEvent,
+            settings: KeyboardShortcutSettings
+        ) -> KeyboardNavigationAction? {
             let ignoredModifiers: NSEvent.ModifierFlags = [.capsLock, .numericPad, .function]
             let activeModifiers = event.modifierFlags
                 .intersection(.deviceIndependentFlagsMask)
@@ -67,6 +77,8 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
                 return nil
             }
 
+            // Arrow keys, Return, and Esc stay fixed so the list always keeps
+            // native navigation regardless of the configured letter keys.
             switch event.keyCode {
             case 123, 53:
                 return .back
@@ -80,20 +92,10 @@ struct KeyboardNavigationMonitor: NSViewRepresentable {
                 break
             }
 
-            return switch event.charactersIgnoringModifiers?.lowercased() {
-            case "h":
-                .back
-            case "j":
-                .next
-            case "k":
-                .previous
-            case "l":
-                .open
-            case "r":
-                .markRead
-            default:
-                nil
+            guard let key = KeyInput(event: event) else {
+                return nil
             }
+            return settings.navigationAction(for: key)
         }
     }
 }

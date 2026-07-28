@@ -1131,7 +1131,7 @@ final class AppStore {
 
     /// conversations.mark accepts any timestamp, so conversations without a
     /// loaded message can still be marked up to the latest activity we saw.
-    private static func slackTimestamp(for date: Date) -> String? {
+    static func slackTimestamp(for date: Date) -> String? {
         guard date > .distantPast else {
             return nil
         }

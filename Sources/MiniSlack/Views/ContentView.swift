@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     let store: AppStore
     let windowState: WindowState
+    @Environment(KeyboardShortcutStore.self) private var shortcuts
 
     var body: some View {
         Group {
@@ -46,7 +47,7 @@ struct ContentView: View {
                 .accessibilityHidden(!windowState.isWorkspaceSearchPresented)
         }
         .background {
-            KeyboardNavigationMonitor { action in
+            KeyboardNavigationMonitor(settings: shortcuts.settings) { action in
                 if !windowState.isQuickSwitcherPresented,
                    !windowState.isWorkspaceSearchPresented
                 {

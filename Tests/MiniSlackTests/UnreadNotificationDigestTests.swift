@@ -242,4 +242,209 @@ struct UnreadNotificationNavigationTests {
         #expect(store.workspaceSearchFocus?.messageID == unreadMessage.id)
         #expect(store.workspaceSearchFocus?.conversationID == "chan")
     }
+
+    @Test
+    func markingAnUnreadNotificationReadKeepsNewerMessagesUnread() throws {
+        let older = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "older",
+            timestamp: Date(timeIntervalSince1970: 100),
+            remoteID: "100.000000"
+        )
+        let middle = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "middle",
+            timestamp: Date(timeIntervalSince1970: 200),
+            remoteID: "200.000000"
+        )
+        let newest = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "newest",
+            timestamp: Date(timeIntervalSince1970: 300),
+            remoteID: "300.000000"
+        )
+        let store = AppStore(conversations: [
+            Conversation(
+                id: "chan",
+                title: "chan",
+                kind: .channel,
+                subtitle: nil,
+                isFavorite: false,
+                unreadCount: 3,
+                mentionCount: 0,
+                latestActivity: Date(timeIntervalSince1970: 300),
+                messages: [older, middle, newest]
+            ),
+        ])
+
+        let digest = store.makeUnreadNotificationDigest()
+        let middleEntry = try #require(digest.entries.first { $0.preview == "middle" })
+        store.markUnreadNotificationRead(middleEntry)
+
+        let conversation = try #require(store.conversations.first { $0.id == "chan" })
+        #expect(conversation.unreadCount == 1)
+        #expect(conversation.mentionCount == 0)
+        #expect(store.readCursorsByConversationID["chan"]?.remoteID == "200.000000")
+        #expect(store.readCursorsByConversationID["chan"]?.timestamp == middle.timestamp)
+        #expect(store.unreadMessages(for: conversation).map(\.body) == ["newest"])
+        #expect(store.makeUnreadNotificationDigest().entries.map(\.preview) == ["newest"])
+        #expect(store.destination == .unreadInbox)
+    }
+
+    @Test
+    func markingTheLatestUnreadNotificationReadClearsTheConversation() throws {
+        let first = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "first",
+            timestamp: Date(timeIntervalSince1970: 100),
+            remoteID: "100.000000"
+        )
+        let latest = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "latest",
+            timestamp: Date(timeIntervalSince1970: 200),
+            remoteID: "200.000000"
+        )
+        let store = AppStore(conversations: [
+            Conversation(
+                id: "chan",
+                title: "chan",
+                kind: .channel,
+                subtitle: nil,
+                isFavorite: false,
+                unreadCount: 2,
+                mentionCount: 0,
+                latestActivity: Date(timeIntervalSince1970: 200),
+                messages: [first, latest]
+            ),
+        ])
+
+        let digest = store.makeUnreadNotificationDigest()
+        let latestEntry = try #require(digest.entries.first { $0.preview == "latest" })
+        store.markUnreadNotificationRead(latestEntry)
+
+        let conversation = try #require(store.conversations.first { $0.id == "chan" })
+        #expect(conversation.unreadCount == 0)
+        #expect(conversation.mentionCount == 0)
+        #expect(store.unreadConversations.isEmpty)
+        #expect(store.makeUnreadNotificationDigest().isEmpty)
+    }
+
+    @Test
+    func markingAnUnreadNotificationReadIsNoOpWhenAlreadyBehindCursor() throws {
+        let older = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "older",
+            timestamp: Date(timeIntervalSince1970: 100),
+            remoteID: "100.000000"
+        )
+        let mid = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "mid",
+            timestamp: Date(timeIntervalSince1970: 200),
+            remoteID: "200.000000"
+        )
+        let newer = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "newer",
+            timestamp: Date(timeIntervalSince1970: 300),
+            remoteID: "300.000000"
+        )
+        let store = AppStore(conversations: [
+            Conversation(
+                id: "chan",
+                title: "chan",
+                kind: .channel,
+                subtitle: nil,
+                isFavorite: false,
+                unreadCount: 1,
+                mentionCount: 0,
+                latestActivity: Date(timeIntervalSince1970: 300),
+                messages: [older, mid, newer]
+            ),
+        ])
+        store.readCursorsByConversationID["chan"] = MessageHistoryReadCursor(
+            remoteID: "200.000000",
+            timestamp: mid.timestamp
+        )
+
+        let staleEntry = UnreadNotificationEntry(
+            messageID: older.id,
+            conversationID: "chan",
+            conversationTitle: "chan",
+            conversationSystemImage: "number",
+            isDirectMessage: false,
+            authorDisplayName: "Maya Chen",
+            authorInitials: "MC",
+            authorAvatarURL: nil,
+            preview: "older",
+            timestamp: older.timestamp,
+            isMention: false
+        )
+        store.markUnreadNotificationRead(staleEntry)
+
+        #expect(store.conversations.first?.unreadCount == 1)
+        #expect(store.readCursorsByConversationID["chan"]?.remoteID == "200.000000")
+        #expect(
+            store.unreadMessages(for: store.conversations[0]).map(\.body) == ["newer"]
+        )
+    }
+
+    @Test
+    func markingAnUnreadNotificationReadRecalculatesMentions() throws {
+        let mention = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "ping <@ME>",
+            timestamp: Date(timeIntervalSince1970: 100),
+            remoteID: "100.000000"
+        )
+        let plain = Message(
+            author: "Maya Chen",
+            authorUserID: "U1",
+            body: "plain",
+            timestamp: Date(timeIntervalSince1970: 200),
+            remoteID: "200.000000"
+        )
+        let store = AppStore(
+            conversations: [
+                Conversation(
+                    id: "chan",
+                    title: "chan",
+                    kind: .channel,
+                    subtitle: nil,
+                    isFavorite: false,
+                    unreadCount: 2,
+                    mentionCount: 1,
+                    latestActivity: Date(timeIntervalSince1970: 200),
+                    messages: [mention, plain]
+                ),
+            ],
+            credentials: SlackCredentials(
+                accessToken: "xoxp-test",
+                refreshToken: "xoxe-test",
+                expiresAt: .distantFuture,
+                teamID: "T1",
+                teamName: "Team",
+                userID: "ME"
+            )
+        )
+
+        let digest = store.makeUnreadNotificationDigest()
+        let mentionEntry = try #require(digest.entries.first { $0.isMention })
+        store.markUnreadNotificationRead(mentionEntry)
+
+        let conversation = try #require(store.conversations.first { $0.id == "chan" })
+        #expect(conversation.unreadCount == 1)
+        #expect(conversation.mentionCount == 0)
+        #expect(store.makeUnreadNotificationDigest().entries.map(\.preview) == ["plain"])
+    }
 }

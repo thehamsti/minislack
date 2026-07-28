@@ -11,7 +11,7 @@ struct ConversationHeader: View {
     let conversation: Conversation
     let compact: Bool
     let presentFind: () -> Void
-    @State private var isUnreadPopoverPresented = false
+    @Environment(KeyboardShortcutStore.self) private var shortcuts
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
@@ -125,7 +125,10 @@ struct ConversationHeader: View {
             UnreadNotificationBell(
                 store: store,
                 compact: compact,
-                isPresented: $isUnreadPopoverPresented
+                isPresented: Binding(
+                    get: { windowState.isUnreadNotificationsPresented },
+                    set: { windowState.isUnreadNotificationsPresented = $0 }
+                )
             )
 
             if compact {
@@ -139,7 +142,7 @@ struct ConversationHeader: View {
                         .headerControlChrome()
                 }
                 .buttonStyle(.plain)
-                .help("Find in conversation (⌘F)")
+                .help("Find in conversation\(shortcutHint(.findInConversation))")
                 .accessibilityLabel("Find in conversation")
 
                 Button {
@@ -149,13 +152,21 @@ struct ConversationHeader: View {
                         .headerControlChrome()
                 }
                 .buttonStyle(.plain)
-                .help("Quick switcher (⌘K)")
+                .help("Quick switcher\(shortcutHint(.quickSwitcher))")
                 .accessibilityLabel("Quick switcher")
             }
 
             overflowMenu
         }
         .fixedSize()
+    }
+
+    /// " (⇧⌘N)" for a bound command, empty when the user cleared it.
+    private func shortcutHint(_ command: KeyboardCommand) -> String {
+        guard let binding = shortcuts.binding(for: command) else {
+            return ""
+        }
+        return " (\(binding.displayString))"
     }
 
     private var overflowMenu: some View {
@@ -213,9 +224,12 @@ private struct UnreadNotificationBell: View {
     let store: AppStore
     let compact: Bool
     @Binding var isPresented: Bool
+    @Environment(KeyboardShortcutStore.self) private var shortcuts
 
     var body: some View {
         let counts = store.unreadNotificationCounts
+        let hint = shortcuts.binding(for: .unreadNotifications)
+            .map { " (\($0.displayString))" } ?? ""
 
         Button {
             isPresented.toggle()
@@ -242,7 +256,7 @@ private struct UnreadNotificationBell: View {
                 }
         }
         .buttonStyle(.plain)
-        .help(counts.summary)
+        .help("\(counts.summary)\(hint)")
         .accessibilityLabel(counts.accessibilityLabel)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             UnreadNotificationList(store: store, compact: compact) {
@@ -262,6 +276,7 @@ private struct UnreadNotificationList: View {
     let store: AppStore
     let compact: Bool
     let dismiss: () -> Void
+    @Environment(KeyboardShortcutStore.self) private var shortcuts
     @State private var isMarkAllConfirmationPresented = false
 
     var body: some View {
@@ -345,10 +360,16 @@ private struct UnreadNotificationList: View {
         ScrollView {
             LazyVStack(spacing: 1) {
                 ForEach(digest.entries) { entry in
-                    UnreadNotificationRow(entry: entry) {
-                        store.openUnreadNotification(entry)
-                        dismiss()
-                    }
+                    UnreadNotificationRow(
+                        entry: entry,
+                        open: {
+                            store.openUnreadNotification(entry)
+                            dismiss()
+                        },
+                        markRead: {
+                            store.markUnreadNotificationRead(entry)
+                        }
+                    )
                 }
             }
             .padding(.horizontal, 6)
@@ -368,7 +389,11 @@ private struct UnreadNotificationList: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.orange)
-            .help("Show the unread inbox (⇧⌘U)")
+            .help(
+                shortcuts.binding(for: .unreadInbox)
+                    .map { "Show the unread inbox (\($0.displayString))" }
+                    ?? "Show the unread inbox"
+            )
 
             Spacer(minLength: 4)
 
@@ -387,6 +412,7 @@ private struct UnreadNotificationList: View {
 private struct UnreadNotificationRow: View {
     let entry: UnreadNotificationEntry
     let open: () -> Void
+    let markRead: () -> Void
     @State private var isHovering = false
 
     var body: some View {
@@ -421,6 +447,7 @@ private struct UnreadNotificationRow: View {
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(.orange)
                                 .help("Mentions you")
+                                .opacity(isHovering ? 0 : 1)
                         }
 
                         Text(UnreadNotificationDigest.shortRelativeLabel(for: entry.timestamp))
@@ -430,6 +457,7 @@ private struct UnreadNotificationRow: View {
                             .lineLimit(1)
                             .fixedSize()
                             .help(entry.timestamp.formatted(date: .abbreviated, time: .shortened))
+                            .opacity(isHovering ? 0 : 1)
                     }
 
                     Text(entry.preview)
@@ -449,7 +477,29 @@ private struct UnreadNotificationRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            Button(action: markRead) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.orange)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovering ? 1 : 0)
+            .disabled(!isHovering)
+            .help("Mark as read through this message")
+            .accessibilityLabel("Mark as read")
+            .accessibilityHint("Marks this conversation read through this message")
+            .padding(.top, 4)
+            .padding(.trailing, 5)
+            .animation(.snappy(duration: 0.15), value: isHovering)
+        }
         .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Open", action: open)
+            Button("Mark as Read", action: markRead)
+        }
         .accessibilityLabel(
             "\(entry.authorDisplayName) in \(entry.conversationTitle): \(entry.preview)"
         )

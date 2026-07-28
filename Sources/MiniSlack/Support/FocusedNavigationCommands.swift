@@ -3,6 +3,8 @@ import SwiftUI
 struct NavigationCommandActions {
     let openQuickSwitcher: () -> Void
     let showUnreadInbox: () -> Void
+    let showUnreadNotifications: () -> Void
+    let canShowUnreadNotifications: Bool
     let moveToNextUnread: () -> Void
     let moveToPreviousUnread: () -> Void
     let markConversationRead: () -> Void
@@ -47,6 +49,7 @@ extension FocusedValues {
 }
 
 struct MiniSlackNavigationCommands: Commands {
+    let shortcuts: KeyboardShortcutStore
     @FocusedValue(\.navigationCommandActions) private var actions
     @FocusedValue(\.conversationFindActions) private var findActions
     @FocusedValue(\.workspaceSearchActions) private var workspaceSearchActions
@@ -56,45 +59,51 @@ struct MiniSlackNavigationCommands: Commands {
             Button("Quick Switcher…") {
                 actions?.openQuickSwitcher()
             }
-            .keyboardShortcut("k", modifiers: .command)
+            .keyboardShortcut(shortcuts.binding(for: .quickSwitcher))
             .disabled(actions == nil)
 
             Button("Find in Conversation…") {
                 findActions?.present()
             }
-            .keyboardShortcut("f", modifiers: .command)
+            .keyboardShortcut(shortcuts.binding(for: .findInConversation))
             .disabled(findActions == nil)
 
             Button("Search Workspace…") {
                 workspaceSearchActions?.present()
             }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .keyboardShortcut(shortcuts.binding(for: .searchWorkspace))
             .disabled(workspaceSearchActions == nil)
 
             Button("Unread Inbox") {
                 actions?.showUnreadInbox()
             }
-            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .keyboardShortcut(shortcuts.binding(for: .unreadInbox))
             .disabled(actions == nil)
+
+            Button("Unread Notifications") {
+                actions?.showUnreadNotifications()
+            }
+            .keyboardShortcut(shortcuts.binding(for: .unreadNotifications))
+            .disabled(actions?.canShowUnreadNotifications != true)
 
             Divider()
 
             Button("Next Unread") {
                 actions?.moveToNextUnread()
             }
-            .keyboardShortcut(.downArrow, modifiers: .control)
+            .keyboardShortcut(shortcuts.binding(for: .nextUnread))
             .disabled(actions == nil)
 
             Button("Previous Unread") {
                 actions?.moveToPreviousUnread()
             }
-            .keyboardShortcut(.upArrow, modifiers: .control)
+            .keyboardShortcut(shortcuts.binding(for: .previousUnread))
             .disabled(actions == nil)
 
             Button("Mark Conversation Read") {
                 actions?.markConversationRead()
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .keyboardShortcut(shortcuts.binding(for: .markConversationRead))
             .disabled(actions?.canMarkConversationRead != true)
         }
     }

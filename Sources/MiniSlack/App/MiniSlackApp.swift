@@ -5,6 +5,7 @@ import SwiftUI
 struct MiniSlackApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = Self.makeStore()
+    @State private var shortcuts = KeyboardShortcutStore()
 
     private static func makeStore() -> AppStore {
         // Renders the full UI with SampleData for design verification,
@@ -18,15 +19,17 @@ struct MiniSlackApp: App {
     var body: some Scene {
         Window("Mini Slack", id: "main") {
             MiniSlackWindow(store: store)
+                .environment(shortcuts)
         }
         .defaultSize(width: 940, height: 680)
         .windowResizability(.contentMinSize)
         .commands {
-            MiniSlackNavigationCommands()
+            MiniSlackNavigationCommands(shortcuts: shortcuts)
         }
 
         Settings {
             SettingsView(store: store)
+                .environment(shortcuts)
         }
     }
 }
@@ -46,6 +49,8 @@ private struct MiniSlackWindow: View {
                 NavigationCommandActions(
                     openQuickSwitcher: windowState.presentQuickSwitcher,
                     showUnreadInbox: store.showUnreadInbox,
+                    showUnreadNotifications: windowState.toggleUnreadNotifications,
+                    canShowUnreadNotifications: store.selectedConversation != nil,
                     moveToNextUnread: { store.moveToUnread(offset: 1) },
                     moveToPreviousUnread: { store.moveToUnread(offset: -1) },
                     markConversationRead: store.markSelectedConversationRead,

@@ -2,8 +2,10 @@ import SwiftUI
 
 struct SettingsView: View {
     let store: AppStore
+    @Environment(KeyboardShortcutStore.self) private var shortcuts
     @State private var isProfileEditorPresented = false
     @State private var isSlackAppSetupPresented = false
+    @State private var isShortcutEditorPresented = false
     @AppStorage("markReadOnOpen") private var markReadOnOpen = true
     @AppStorage("showUnreadCounts") private var showUnreadCounts = true
     @AppStorage(HistoryBackfillSpeed.defaultsKey)
@@ -19,11 +21,18 @@ struct SettingsView: View {
             }
 
             Section("Keyboard") {
-                LabeledContent("Quick switcher", value: "⌘K")
-                LabeledContent("Unread inbox", value: "⌘⇧U")
-                LabeledContent("Next / previous unread", value: "⌃↓ / ⌃↑")
-                LabeledContent("Move selection", value: "J / K or ↓ / ↑")
-                LabeledContent("Open / back", value: "L / H or → / ←")
+                ForEach(KeyboardCommand.allCases) { command in
+                    LabeledContent(
+                        command.title,
+                        value: shortcuts.displayString(for: command)
+                    )
+                }
+                Button("Customize shortcuts…") {
+                    isShortcutEditorPresented = true
+                }
+                Text("Arrow keys, Return, and Esc always navigate lists.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("History backfill") {
@@ -104,6 +113,11 @@ struct SettingsView: View {
         .navigationTitle("Mini Slack Settings")
         .onChange(of: incrementalSyncMode) {
             store.restartIncrementalSync()
+        }
+        .sheet(isPresented: $isShortcutEditorPresented) {
+            KeyboardShortcutSettingsView(shortcuts: shortcuts) {
+                isShortcutEditorPresented = false
+            }
         }
         .sheet(isPresented: $isProfileEditorPresented) {
             ProfileSettingsView(store: store)
