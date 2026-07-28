@@ -552,9 +552,15 @@ extension SlackAPIClient {
         byteCount: Int64,
         accessToken: String
     ) async throws -> (url: URL, fileID: String) {
-        let upload: SlackUploadURLResponse = try await post(
+        // This endpoint ignores application/json bodies and reports missing
+        // filename/length even when they are present. Official clients send
+        // form-urlencoded fields instead.
+        let upload: SlackUploadURLResponse = try await postForm(
             method: "files.getUploadURLExternal",
-            body: ["filename": filename, "length": String(byteCount)],
+            body: [
+                "filename": filename,
+                "length": String(byteCount),
+            ],
             accessToken: accessToken
         )
         try validate(upload)

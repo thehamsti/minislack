@@ -56,24 +56,28 @@ struct SlackAPIClient: Sendable {
         var errorDescription: String? {
             switch self {
             case let .http(status):
-                "Slack returned HTTP \(status)."
+                return "Slack returned HTTP \(status)."
             case let .rateLimited(seconds):
-                "Slack is rate limiting requests. Try again in \(seconds) seconds."
+                return "Slack is rate limiting requests. Try again in \(seconds) seconds."
             case let .slack(error):
-                switch error {
+                // Perform may append Slack response_metadata after the code.
+                let code = error.split(separator: " ", maxSplits: 1)
+                    .first
+                    .map(String.init) ?? error
+                switch code {
                 case "missing_scope":
-                    "Reconnect this workspace so Mini Slack can request the required access (missing_scope)."
+                    return "Reconnect this workspace so Mini Slack can request the required access (missing_scope)."
                 case "not_in_channel":
-                    "Join this channel in Slack, then retry."
+                    return "Join this channel in Slack, then retry."
                 case "channel_not_found":
-                    "This channel is not available to the connected Slack account."
+                    return "This channel is not available to the connected Slack account."
                 default:
-                    "Slack API error: \(error)."
+                    return "Slack API error: \(error)."
                 }
             case let .decoding(detail):
-                "Slack response decoding failed at \(detail)."
+                return "Slack response decoding failed at \(detail)."
             case .invalidResponse:
-                "Slack returned an invalid response."
+                return "Slack returned an invalid response."
             }
         }
     }
@@ -597,6 +601,46 @@ struct SlackAPIClient: Sendable {
         )
     }
 
+    /// Some Slack methods (notably `files.getUploadURLExternal`) reject or ignore
+    /// JSON bodies and only accept form-urlencoded fields.
+    func postForm<T: Decodable>(
+        method: String,
+        body: [String: String],
+        accessToken: String,
+        retryPolicy: RequestRetryPolicy = .rateLimitOnly
+    ) async throws -> T {
+        var request = URLRequest(url: URL(string: "https://slack.com/api/\(method)")!)
+        request.timeoutInterval = 20
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(
+            "application/x-www-form-urlencoded",
+            forHTTPHeaderField: "Content-Type"
+        )
+        request.httpBody = Self.formURLEncodedBody(body)
+        return try await perform(
+            request,
+            accessToken: accessToken,
+            retryPolicy: retryPolicy
+        )
+    }
+
+    static func formURLEncodedBody(_ body: [String: String]) -> Data {
+        body
+            .sorted { $0.key < $1.key }
+            .map { key, value in
+                "\(formEncode(key))=\(formEncode(value))"
+            }
+            .joined(separator: "&")
+            .data(using: .utf8) ?? Data()
+    }
+
+    private static func formEncode(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
     func perform<T: Decodable>(
         _ request: URLRequest,
         accessToken: String,
@@ -655,7 +699,9 @@ struct SlackAPIClient: Sendable {
             if let envelope = try? decoder.decode(SlackBaseResponse.self, from: data),
                !envelope.ok
             {
-                throw APIError.slack(envelope.error ?? "unknown_error")
+                throw APIError.slack(
+                    Self.slackErrorDescription(from: envelope)
+                )
             }
             do {
                 return try decoder.decode(T.self, from: data)
@@ -713,6 +759,20 @@ struct SlackAPIClient: Sendable {
         }
     }
 
+    private static func slackErrorDescription(
+        from envelope: SlackBaseResponse
+    ) -> String {
+        let code = envelope.error ?? "unknown_error"
+        let detail = envelope.responseMetadata?.messages?
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard let detail, !detail.isEmpty else {
+            return code
+        }
+        return "\(code) (\(detail))"
+    }
+
     private static func date(fromSlackTimestamp timestamp: String?) -> Date? {
         timestamp.flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
     }
@@ -725,15 +785,24 @@ protocol SlackResponse {
 
 struct SlackResponseMetadata: Decodable {
     let nextCursor: String?
+    let messages: [String]?
 
     enum CodingKeys: String, CodingKey {
         case nextCursor = "next_cursor"
+        case messages
     }
 }
 
 struct SlackBaseResponse: Decodable, SlackResponse {
     let ok: Bool
     let error: String?
+    let responseMetadata: SlackResponseMetadata?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+        case responseMetadata = "response_metadata"
+    }
 }
 
 struct SlackEmojiResponse: Decodable, SlackResponse {

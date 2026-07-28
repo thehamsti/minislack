@@ -174,6 +174,63 @@ struct ComposerAttachmentTests {
     }
 
     @Test
+    func getUploadURLExternalUsesFormURLEncodedFilenameAndLength() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let fileURL = temporaryDirectory.appending(path: "photo.png")
+        try tinyPNG.write(to: fileURL)
+        let token = "length-form-\(UUID().uuidString)"
+        let recorder = ComposerUploadRequestRecorder()
+        let client = composerUploadClient(token: token) { request in
+            let request = try materializedRequest(request)
+            recorder.append(request)
+            switch (request.url?.host, request.url?.path) {
+            case ("slack.com", "/api/files.getUploadURLExternal"):
+                return try composerResponse(
+                    for: request,
+                    json: """
+                    {
+                      "ok": true,
+                      "upload_url": "https://uploads.example.test/\(token)",
+                      "file_id": "FIMG"
+                    }
+                    """
+                )
+            case ("uploads.example.test", _):
+                return try composerResponse(for: request, json: "{}")
+            case ("slack.com", "/api/files.completeUploadExternal"):
+                return try composerResponse(
+                    for: request,
+                    json: #"{"ok":true,"files":[{"id":"FIMG","title":"photo"}]}"#
+                )
+            default:
+                throw ComposerUploadStubError.unexpectedRequest
+            }
+        }
+        defer { ComposerUploadURLProtocol.unregister(token: token) }
+
+        _ = try await client.uploadFile(
+            fileURL: fileURL,
+            filename: "photo.png",
+            title: "photo",
+            channelID: "C1",
+            accessToken: token
+        )
+
+        let uploadRequest = try #require(recorder.values.first)
+        #expect(
+            uploadRequest.value(forHTTPHeaderField: "Content-Type")
+                == "application/x-www-form-urlencoded"
+        )
+        let uploadRequestBody = try #require(uploadRequest.httpBody)
+        let form = String(decoding: uploadRequestBody, as: UTF8.self)
+        // Slack ignores JSON for this method and reports missing filename/length.
+        #expect(form.contains("filename=photo.png"))
+        #expect(form.contains("length=\(tinyPNG.count)"))
+        #expect((try? JSONSerialization.jsonObject(with: uploadRequestBody)) == nil)
+    }
+
+    @Test
     func fileURLUploadStreamsBytesAndEncodesInitialComment() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
@@ -337,15 +394,14 @@ struct ComposerAttachmentTests {
             "/\(token)",
             "/api/files.completeUploadExternal",
         ])
-        let uploadRequestBody = try #require(requests[0].httpBody)
-        let uploadRequest = try #require(
-            JSONSerialization.jsonObject(with: uploadRequestBody)
-                as? [String: String]
+        #expect(
+            requests[0].value(forHTTPHeaderField: "Content-Type")
+                == "application/x-www-form-urlencoded"
         )
-        #expect(uploadRequest == [
-            "filename": "brief.txt",
-            "length": String(fileData.count),
-        ])
+        let uploadRequestBody = try #require(requests[0].httpBody)
+        let form = String(decoding: uploadRequestBody, as: UTF8.self)
+        #expect(form.contains("filename=brief.txt"))
+        #expect(form.contains("length=\(fileData.count)"))
         #expect(requests[1].httpBody == fileData)
         let completionBody = try #require(requests[2].httpBody)
         let completion = try #require(
