@@ -4,6 +4,26 @@ import Testing
 
 struct ConversationScrollStateTests {
     @Test
+    func scrollViewportPositionHandlesFlippedConversationCoordinates() {
+        #expect(
+            ScrollViewportPosition.isAtBottom(
+                documentBounds: CGRect(x: 0, y: 0, width: 400, height: 1_010),
+                visibleRect: CGRect(x: 0, y: 500, width: 400, height: 500),
+                isFlipped: true,
+                tolerance: 11
+            )
+        )
+        #expect(
+            !ScrollViewportPosition.isAtBottom(
+                documentBounds: CGRect(x: 0, y: 0, width: 400, height: 1_010),
+                visibleRect: CGRect(x: 0, y: 480, width: 400, height: 500),
+                isFlipped: true,
+                tolerance: 11
+            )
+        )
+    }
+
+    @Test
     func firstLoadedMessagePositionsAtBottomOnce() {
         var state = ConversationScrollState()
         let messageID = UUID()
@@ -209,5 +229,55 @@ struct ConversationScrollStateTests {
             ) == .message(focusedMessageID)
         )
         #expect(!state.isAtBottom)
+    }
+
+    @Test
+    func visibleLatestMessageIsEligibleToClearUnreadState() {
+        var state = ConversationScrollState()
+        _ = state.initialTarget(lastMessageID: UUID(), focusedMessageID: nil)
+
+        #expect(
+            state.shouldMarkRead(
+                isBottomVisible: true,
+                hasUnreadMessages: true,
+                isSearching: false,
+                markReadOnOpen: true,
+                isAppActive: true
+            )
+        )
+        #expect(
+            !state.shouldMarkRead(
+                isBottomVisible: false,
+                hasUnreadMessages: true,
+                isSearching: false,
+                markReadOnOpen: true,
+                isAppActive: true
+            )
+        )
+    }
+
+    @Test
+    func visibleLatestMessageDoesNotClearUnreadStateWhileInactiveOrSearching() {
+        var state = ConversationScrollState()
+        _ = state.initialTarget(lastMessageID: UUID(), focusedMessageID: nil)
+
+        #expect(
+            !state.shouldMarkRead(
+                isBottomVisible: true,
+                hasUnreadMessages: true,
+                isSearching: false,
+                markReadOnOpen: true,
+                isAppActive: false
+            )
+        )
+        #expect(
+            !state.shouldMarkRead(
+                isBottomVisible: true,
+                hasUnreadMessages: true,
+                isSearching: true,
+                markReadOnOpen: true,
+                isAppActive: true
+            )
+        )
     }
 }

@@ -221,12 +221,15 @@ private struct MessageList: View {
     let conversation: Conversation
     let findState: ConversationFindState
     let focusedMessageID: UUID?
+    @AppStorage("markReadOnOpen") private var markReadOnOpen = true
     @State private var scrollState = ConversationScrollState()
     @State private var settleTask: Task<Void, Never>?
+    @State private var contentHeight: CGFloat = 0
+    @State private var isBottomVisible = true
 
     private static let bottomAnchorID = "conversation-bottom"
-    private static let scrollCoordinateSpace = "conversation-message-list"
     private static let settleDelay = Duration.milliseconds(32)
+    private static let verticalContentPadding: CGFloat = 10
 
     /// A focused message can only be scrolled to once it exists in loaded
     /// history; until then the list stays anchored to the bottom.
@@ -247,7 +250,7 @@ private struct MessageList: View {
             : conversation.messages
 
         ScrollViewReader { proxy in
-            GeometryReader { viewport in
+            GeometryReader { _ in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         if !findState.isSearching,
@@ -333,22 +336,27 @@ private struct MessageList: View {
                             .frame(height: 1)
                             .id(Self.bottomAnchorID)
                     }
-                    .padding(.vertical, 10)
+                    .padding(.vertical, Self.verticalContentPadding)
                     .background {
                         GeometryReader { geometry in
                             Color.clear.preference(
                                 key: MessageListMetricsKey.self,
-                                value: MessageListMetrics(
-                                    contentHeight: geometry.size.height,
-                                    contentBottom: geometry.frame(
-                                        in: .named(Self.scrollCoordinateSpace)
-                                    ).maxY
-                                )
+                                value: MessageListMetrics(contentHeight: geometry.size.height)
+                            )
+                        }
+                    }
+                    .background {
+                        ScrollViewportObserver(
+                            bottomTolerance: Self.verticalContentPadding + 1
+                        ) { isBottomVisible in
+                            updateScrollMetrics(
+                                isBottomVisible: isBottomVisible,
+                                contentHeight: contentHeight,
+                                proxy: proxy
                             )
                         }
                     }
                 }
-                .coordinateSpace(name: Self.scrollCoordinateSpace)
                 .overlay {
                     if historyState.isLoadingInitial && conversation.messages.isEmpty {
                         ProgressView("Loading recent messages…")
@@ -384,14 +392,12 @@ private struct MessageList: View {
                     }
                 }
                 .onPreferenceChange(MessageListMetricsKey.self) { metrics in
-                    let needsReanchor = scrollState.updateMetrics(
-                        isBottomVisible: metrics.contentBottom
-                            <= viewport.size.height + 8,
-                        contentHeight: metrics.contentHeight
+                    contentHeight = metrics.contentHeight
+                    updateScrollMetrics(
+                        isBottomVisible: isBottomVisible,
+                        contentHeight: metrics.contentHeight,
+                        proxy: proxy
                     )
-                    if needsReanchor, !findState.isSearching {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
                 }
                 .onAppear {
                     scrollOnConversationFocus(proxy: proxy)
@@ -446,6 +452,30 @@ private struct MessageList: View {
             return
         }
         settle(target, proxy: proxy)
+    }
+
+    private func updateScrollMetrics(
+        isBottomVisible: Bool,
+        contentHeight: CGFloat,
+        proxy: ScrollViewProxy
+    ) {
+        self.isBottomVisible = isBottomVisible
+        let needsReanchor = scrollState.updateMetrics(
+            isBottomVisible: isBottomVisible,
+            contentHeight: contentHeight
+        )
+        if needsReanchor, !findState.isSearching {
+            proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+        }
+        if scrollState.shouldMarkRead(
+            isBottomVisible: isBottomVisible,
+            hasUnreadMessages: conversation.isUnread,
+            isSearching: findState.isSearching,
+            markReadOnOpen: markReadOnOpen,
+            isAppActive: NSApp.isActive
+        ) {
+            store.markConversationRead(conversation.id)
+        }
     }
 
     private func settleLatestIfNeeded(proxy: ScrollViewProxy) {
@@ -503,14 +533,10 @@ private struct MessageList: View {
 
 private struct MessageListMetrics: Equatable {
     let contentHeight: CGFloat
-    let contentBottom: CGFloat
 }
 
 private struct MessageListMetricsKey: PreferenceKey {
-    static let defaultValue = MessageListMetrics(
-        contentHeight: 0,
-        contentBottom: .infinity
-    )
+    static let defaultValue = MessageListMetrics(contentHeight: 0)
 
     static func reduce(
         value: inout MessageListMetrics,

@@ -118,4 +118,19 @@ struct ConversationScrollState: Equatable, Sendable {
             && !isSearching
             && pendingTarget == nil
     }
+
+    func shouldMarkRead(
+        isBottomVisible: Bool,
+        hasUnreadMessages: Bool,
+        isSearching: Bool,
+        markReadOnOpen: Bool,
+        isAppActive: Bool
+    ) -> Bool {
+        hasPositionedInitially
+            && isBottomVisible
+            && hasUnreadMessages
+            && !isSearching
+            && markReadOnOpen
+            && isAppActive
+    }
 }
