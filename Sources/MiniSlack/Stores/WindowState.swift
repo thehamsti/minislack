@@ -3,10 +3,23 @@ import Observation
 @MainActor
 @Observable
 final class WindowState {
+    var isCompactSidebarPresented = false
     var isQuickSwitcherPresented = false
     var isWorkspaceSearchPresented = false
     var isUnreadNotificationsPresented = false
     var selectedThread: ThreadIdentifier?
+
+    func toggleCompactSidebar() {
+        isCompactSidebarPresented.toggle()
+    }
+
+    func presentCompactSidebar() {
+        isCompactSidebarPresented = true
+    }
+
+    func dismissCompactSidebar() {
+        isCompactSidebarPresented = false
+    }
 
     func toggleUnreadNotifications() {
         isUnreadNotificationsPresented.toggle()
@@ -17,6 +30,7 @@ final class WindowState {
     }
 
     func presentQuickSwitcher() {
+        isCompactSidebarPresented = false
         isWorkspaceSearchPresented = false
         isQuickSwitcherPresented = true
     }
@@ -26,6 +40,7 @@ final class WindowState {
     }
 
     func presentWorkspaceSearch() {
+        isCompactSidebarPresented = false
         isQuickSwitcherPresented = false
         isWorkspaceSearchPresented = true
     }

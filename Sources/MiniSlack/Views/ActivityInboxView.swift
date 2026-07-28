@@ -53,6 +53,8 @@ struct ActivityInboxView: View {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(.borderless)
+
+                CompactSidebarButton(windowState: windowState)
             }
             Image(systemName: "bell.fill")
                 .foregroundStyle(.orange)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SavedMessagesView: View {
     let store: AppStore
+    let windowState: WindowState
     let compact: Bool
 
     var body: some View {
@@ -39,6 +40,8 @@ struct SavedMessagesView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Back to unreads")
+
+                CompactSidebarButton(windowState: windowState)
             }
             Image(systemName: "bookmark.fill")
                 .foregroundStyle(.orange)

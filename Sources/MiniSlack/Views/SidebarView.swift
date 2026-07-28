@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     let store: AppStore
     let windowState: WindowState
+    var compact = false
     @AppStorage("sidebarSort.unread") private var unreadSort = ConversationSortOption.activity
     @AppStorage("sidebarSort.favorites") private var favoritesSort = ConversationSortOption.activity
     @AppStorage("sidebarSort.channels") private var channelsSort = ConversationSortOption.activity
@@ -112,21 +113,23 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("Acme Studio")
+        .navigationTitle(compact ? "" : "Acme Studio")
         .safeAreaInset(edge: .bottom) {
             KeyboardHint()
         }
         .toolbar {
-            ToolbarItem {
-                ConversationManagementMenu(store: store)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    windowState.presentQuickSwitcher()
-                } label: {
-                    Image(systemName: "magnifyingglass")
+            if !compact {
+                ToolbarItem {
+                    ConversationManagementMenu(store: store)
                 }
-                .help("Quick switcher (⌘K)")
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        windowState.presentQuickSwitcher()
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .help("Quick switcher (⌘K)")
+                }
             }
         }
     }

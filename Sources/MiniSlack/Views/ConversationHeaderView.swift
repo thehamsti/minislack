@@ -25,6 +25,8 @@ struct ConversationHeader: View {
                 .buttonStyle(.plain)
                 .help("Back to unreads (Esc)")
                 .accessibilityLabel("Back to unreads")
+
+                CompactSidebarButton(windowState: windowState)
             }
 
             identity

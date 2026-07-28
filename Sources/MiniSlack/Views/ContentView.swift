@@ -52,6 +52,10 @@ struct ContentView: View {
                 if !windowState.isQuickSwitcherPresented,
                    !windowState.isWorkspaceSearchPresented
                 {
+                    if action == .back, windowState.isCompactSidebarPresented {
+                        windowState.dismissCompactSidebar()
+                        return
+                    }
                     if action == .back, windowState.selectedThread != nil {
                         windowState.dismissThread()
                         return
@@ -140,6 +144,53 @@ private struct CompactRootView: View {
     let windowState: WindowState
 
     var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                destination
+
+                if windowState.isCompactSidebarPresented {
+                    Color.black.opacity(0.16)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            dismissSidebar()
+                        }
+                        .transition(.opacity)
+
+                    CompactSidebarView(store: store, windowState: windowState)
+                        .frame(width: min(280, proxy.size.width - 48))
+                        .transition(.move(edge: .leading))
+                        .shadow(color: .black.opacity(0.22), radius: 18, x: 5)
+                        .onContinuousHover { phase in
+                            if case .ended = phase {
+                                dismissSidebar()
+                            }
+                        }
+                } else {
+                    Color.black.opacity(0.001)
+                        .frame(width: 5)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            if case .active = phase {
+                                presentSidebar()
+                            }
+                        }
+                        .zIndex(1)
+                }
+            }
+        }
+        .onChange(of: store.destination) {
+            if windowState.isCompactSidebarPresented {
+                dismissSidebar()
+            }
+        }
+        .onDisappear {
+            windowState.dismissCompactSidebar()
+        }
+    }
+
+    @ViewBuilder
+    private var destination: some View {
         switch store.destination {
         case .unreadInbox:
             UnreadInboxView(store: store, windowState: windowState, compact: true)
@@ -152,12 +203,87 @@ private struct CompactRootView: View {
             )
             .transition(.opacity)
         case .savedMessages:
-            SavedMessagesView(store: store, compact: true)
+            SavedMessagesView(store: store, windowState: windowState, compact: true)
                 .transition(.opacity)
         case .conversation:
             ConversationView(store: store, windowState: windowState, compact: true)
                 .transition(.opacity)
         }
+    }
+
+    private func presentSidebar() {
+        withAnimation(.snappy(duration: 0.2)) {
+            windowState.presentCompactSidebar()
+        }
+    }
+
+    private func dismissSidebar() {
+        withAnimation(.snappy(duration: 0.2)) {
+            windowState.dismissCompactSidebar()
+        }
+    }
+}
+
+private struct CompactSidebarView: View {
+    let store: AppStore
+    let windowState: WindowState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Acme Studio")
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer()
+
+                ConversationManagementMenu(store: store)
+
+                Button {
+                    windowState.presentQuickSwitcher()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .buttonStyle(.borderless)
+                .help("Quick switcher (⌘K)")
+
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        windowState.dismissCompactSidebar()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .buttonStyle(.borderless)
+                .help("Close sidebar")
+                .accessibilityLabel("Close sidebar")
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 46)
+            .background(.bar)
+
+            Divider()
+
+            SidebarView(store: store, windowState: windowState, compact: true)
+        }
+        .background(.regularMaterial)
+    }
+}
+
+struct CompactSidebarButton: View {
+    let windowState: WindowState
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) {
+                windowState.toggleCompactSidebar()
+            }
+        } label: {
+            Image(systemName: "sidebar.left")
+        }
+        .buttonStyle(.borderless)
+        .help("Open sidebar")
+        .accessibilityLabel("Open sidebar")
     }
 }
 
@@ -176,7 +302,7 @@ private struct DestinationView: View {
                 compact: false
             )
         case .savedMessages:
-            SavedMessagesView(store: store, compact: false)
+            SavedMessagesView(store: store, windowState: windowState, compact: false)
         case .conversation:
             ConversationView(store: store, windowState: windowState, compact: false)
         }

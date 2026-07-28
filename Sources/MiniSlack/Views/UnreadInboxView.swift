@@ -91,6 +91,10 @@ private struct UnreadHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            if compact {
+                CompactSidebarButton(windowState: windowState)
+            }
+
             VStack(alignment: .leading, spacing: 1) {
                 Text("Unreads")
                     .font(.title2.bold())

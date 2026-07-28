@@ -91,6 +91,8 @@ struct ThreadPane: View {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(.borderless)
+
+                CompactSidebarButton(windowState: windowState)
             }
             Image(systemName: "bubble.left.and.bubble.right")
                 .foregroundStyle(.secondary)
