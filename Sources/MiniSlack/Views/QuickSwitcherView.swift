@@ -148,6 +148,7 @@ struct QuickSwitcherView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
                     }
+                    .scrollIndicators(.visible)
                     .onChange(of: store.quickSwitcherSelection) {
                         if let selection = store.quickSwitcherSelection {
                             withAnimation(.snappy(duration: 0.12)) {
@@ -221,11 +222,6 @@ struct QuickSwitcherView: View {
                     in: RoundedRectangle(cornerRadius: 7)
                 )
                 .contentShape(Rectangle())
-        }
-        .onHover { hovering in
-            if hovering {
-                store.quickSwitcherSelection = item
-            }
         }
         .buttonStyle(.plain)
         .id(item.id)
