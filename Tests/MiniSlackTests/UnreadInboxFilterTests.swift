@@ -199,6 +199,22 @@ struct UnreadInboxFilterTests {
         #expect(filters.sortOrder == .oldest)
     }
 
+    @Test
+    func chipTitlesStayCompactForNarrowFilterBar() {
+        #expect(UnreadConversationKindFilter.all.chipTitle == "Type")
+        #expect(UnreadConversationKindFilter.directMessages.chipTitle == "DMs")
+        #expect(UnreadConversationKindFilter.groupDirectMessages.chipTitle == "Groups")
+
+        #expect(UnreadTimeRange.anyTime.chipTitle == "When")
+        #expect(UnreadTimeRange.lastHour.chipTitle == "1h")
+        #expect(UnreadTimeRange.lastWeek.chipTitle == "7d")
+        #expect(UnreadTimeRange.custom(start: .now, end: .now).chipTitle == "Custom")
+
+        #expect(UnreadSortOrder.mentionsFirst.chipTitle == "Mentions")
+        #expect(UnreadSortOrder.newest.chipTitle == "Newest")
+        #expect(UnreadSortOrder.name.chipTitle == "Name")
+    }
+
     private func conversation(
         id: String,
         kind: ConversationKind = .channel,

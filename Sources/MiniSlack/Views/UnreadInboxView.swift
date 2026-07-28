@@ -166,41 +166,92 @@ private struct UnreadFilterBar: View {
     @State private var customRangeStart = Date.now.addingTimeInterval(-86_400)
     @State private var customRangeEnd = Date.now
 
+    private var horizontalPadding: CGFloat { compact ? 12 : 16 }
+    private var chipMaxTitleWidth: CGFloat { compact ? 72 : 110 }
+
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                searchField
-                kindMenu
-                conversationMenu
-                authorMenu
-                whenControl
-                mentionsToggle
-                sortMenu
-                if store.unreadFilters.isFiltering {
-                    clearButton
-                }
-            }
-            .padding(.horizontal, compact ? 10 : 14)
-            .padding(.vertical, 7)
+        VStack(alignment: .leading, spacing: 6) {
+            searchRow
+            chipsRow
         }
-        .scrollIndicators(.hidden)
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .background(.bar)
         .overlay(alignment: .bottom) {
             Divider()
         }
     }
 
-    private var searchField: some View {
-        TextField(
-            "Filter text…",
-            text: Binding(
-                get: { store.unreadFilters.query },
-                set: { store.unreadFilters.query = $0 }
-            )
-        )
-        .textFieldStyle(.roundedBorder)
-        .controlSize(.small)
-        .frame(width: compact ? 104 : 136)
+    private var searchRow: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                TextField(
+                    "Search unreads",
+                    text: Binding(
+                        get: { store.unreadFilters.query },
+                        set: { store.unreadFilters.query = $0 }
+                    )
+                )
+                .textFieldStyle(.plain)
+                .font(.callout)
+                if !store.unreadFilters.query.isEmpty {
+                    Button {
+                        store.unreadFilters.query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+            }
+
+            if store.unreadFilters.isFiltering {
+                Button("Clear") {
+                    store.unreadFilters.clearActiveFilters()
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .help("Clear all filters")
+            }
+        }
+    }
+
+    private var chipsRow: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 5) {
+                kindMenu
+                conversationMenu
+                authorMenu
+                whenControl
+                mentionsToggle
+
+                chipDivider
+
+                sortMenu
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private var chipDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.1))
+            .frame(width: 1, height: 14)
+            .padding(.horizontal, 2)
     }
 
     private var kindMenu: some View {
@@ -217,15 +268,16 @@ private struct UnreadFilterBar: View {
                 }
             }
         } label: {
-            capsuleLabel(
-                store.unreadFilters.kind == .all ? "Type" : store.unreadFilters.kind.title,
-                systemImage: "bubble.left.and.bubble.right",
+            filterChip(
+                title: store.unreadFilters.kind.chipTitle,
+                systemImage: store.unreadFilters.kind.systemImage,
                 isActive: store.unreadFilters.kind != .all
             )
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .help("Filter by conversation type")
     }
 
     private var conversationMenu: some View {
@@ -250,8 +302,8 @@ private struct UnreadFilterBar: View {
                 )
             }
         } label: {
-            capsuleLabel(
-                conversationMenuTitle,
+            filterChip(
+                title: conversationMenuTitle,
                 systemImage: "number",
                 isActive: !store.unreadFilters.conversationIDs.isEmpty
             )
@@ -259,12 +311,13 @@ private struct UnreadFilterBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .help("Filter by conversation")
     }
 
     private var conversationMenuTitle: String {
         let ids = store.unreadFilters.conversationIDs
         if ids.isEmpty {
-            return "Conversation"
+            return "In"
         }
         if ids.count == 1,
            let id = ids.first,
@@ -272,7 +325,7 @@ private struct UnreadFilterBar: View {
         {
             return conversation.title
         }
-        return "\(ids.count) conversations"
+        return "\(ids.count) chats"
     }
 
     private var authorMenu: some View {
@@ -294,8 +347,8 @@ private struct UnreadFilterBar: View {
                 )
             }
         } label: {
-            capsuleLabel(
-                authorMenuTitle,
+            filterChip(
+                title: authorMenuTitle,
                 systemImage: "person",
                 isActive: !store.unreadFilters.authorIDs.isEmpty
             )
@@ -303,6 +356,7 @@ private struct UnreadFilterBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .help("Filter by message author")
     }
 
     private var authorMenuTitle: String {
@@ -323,14 +377,14 @@ private struct UnreadFilterBar: View {
         Button {
             isWhenPopoverPresented.toggle()
         } label: {
-            capsuleLabel(
-                store.unreadFilters.timeRange.isActive
-                    ? store.unreadFilters.timeRange.title : "When",
+            filterChip(
+                title: store.unreadFilters.timeRange.chipTitle,
                 systemImage: "clock",
                 isActive: store.unreadFilters.timeRange.isActive
             )
         }
         .buttonStyle(.plain)
+        .help("Filter by time")
         .popover(isPresented: $isWhenPopoverPresented, arrowEdge: .bottom) {
             whenPopoverContent
         }
@@ -403,11 +457,10 @@ private struct UnreadFilterBar: View {
         Button {
             store.unreadFilters.mentionsOnly.toggle()
         } label: {
-            capsuleLabel(
-                "Mentions",
+            filterChip(
+                title: store.unreadFilters.mentionsOnly || !compact ? "Mentions" : nil,
                 systemImage: "at",
-                isActive: store.unreadFilters.mentionsOnly,
-                showsChevron: false
+                isActive: store.unreadFilters.mentionsOnly
             )
         }
         .buttonStyle(.plain)
@@ -428,28 +481,19 @@ private struct UnreadFilterBar: View {
                 }
             }
         } label: {
-            capsuleLabel(
-                store.unreadFilters.sortOrder.title,
+            let isActive = store.unreadFilters.sortOrder != .mentionsFirst
+            filterChip(
+                title: isActive || !compact
+                    ? store.unreadFilters.sortOrder.chipTitle
+                    : nil,
                 systemImage: "arrow.up.arrow.down",
-                isActive: store.unreadFilters.sortOrder != .mentionsFirst
+                isActive: isActive
             )
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Sort unread conversations")
-    }
-
-    private var clearButton: some View {
-        Button {
-            store.unreadFilters.clearActiveFilters()
-        } label: {
-            Image(systemName: "xmark.circle.fill")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .help("Clear all filters")
+        .help("Sort: \(store.unreadFilters.sortOrder.title)")
     }
 
     private func selectionBinding(
@@ -468,33 +512,40 @@ private struct UnreadFilterBar: View {
         )
     }
 
-    private func capsuleLabel(
-        _ title: String,
+    @ViewBuilder
+    private func filterChip(
+        title: String?,
         systemImage: String,
-        isActive: Bool,
-        showsChevron: Bool = true
+        isActive: Bool
     ) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.caption2)
-            Text(title)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-            if showsChevron {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .bold))
-                    .opacity(0.7)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 12)
+            if let title {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: chipMaxTitleWidth, alignment: .leading)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4.5)
+        .padding(.horizontal, title == nil ? 7 : 8)
+        .padding(.vertical, 5)
         .foregroundStyle(isActive ? Color.orange : Color.secondary)
         .background(
             isActive
-                ? AnyShapeStyle(Color.orange.opacity(0.15))
-                : AnyShapeStyle(Color.primary.opacity(0.05)),
+                ? Color.orange.opacity(0.14)
+                : Color.primary.opacity(0.05),
             in: Capsule()
         )
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    isActive ? Color.orange.opacity(0.28) : Color.clear,
+                    lineWidth: 0.5
+                )
+        }
+        .contentShape(Capsule())
     }
 }
 

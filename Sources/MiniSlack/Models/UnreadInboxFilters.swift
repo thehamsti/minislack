@@ -21,10 +21,24 @@ enum UnreadConversationKindFilter: String, CaseIterable, Identifiable, Sendable 
         }
     }
 
+    /// Compact label for the unread filter chip.
+    var chipTitle: String {
+        switch self {
+        case .all:
+            "Type"
+        case .channels:
+            "Channels"
+        case .directMessages:
+            "DMs"
+        case .groupDirectMessages:
+            "Groups"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .all:
-            "tray.full"
+            "bubble.left.and.bubble.right"
         case .channels:
             "number"
         case .directMessages:
@@ -72,6 +86,24 @@ enum UnreadTimeRange: Equatable, Sendable {
             "Last 7 days"
         case .custom:
             "Custom range"
+        }
+    }
+
+    /// Compact label for the unread time filter chip.
+    var chipTitle: String {
+        switch self {
+        case .anyTime:
+            "When"
+        case .lastHour:
+            "1h"
+        case .today:
+            "Today"
+        case .yesterday:
+            "Yesterday"
+        case .lastWeek:
+            "7d"
+        case .custom:
+            "Custom"
         }
     }
 
@@ -131,6 +163,20 @@ enum UnreadSortOrder: String, CaseIterable, Identifiable, Sendable {
             "Oldest first"
         case .name:
             "Name A–Z"
+        }
+    }
+
+    /// Compact label for the unread sort chip.
+    var chipTitle: String {
+        switch self {
+        case .mentionsFirst:
+            "Mentions"
+        case .newest:
+            "Newest"
+        case .oldest:
+            "Oldest"
+        case .name:
+            "Name"
         }
     }
 }
