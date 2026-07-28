@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import MiniSlack
 
 @MainActor
@@ -64,6 +65,74 @@ struct ComposerAttachmentTests {
         #expect(data == tinyPNG)
         #expect(suggestedFilename.hasPrefix("Pasted Image "))
         #expect(suggestedFilename.hasSuffix(".png"))
+    }
+
+    @Test
+    func windowDropPrefersFilesAndQueuesImageDataOnTheActiveConversation() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let movieURL = temporaryDirectory.appending(path: "clip.mov")
+        try Data("movie".utf8).write(to: movieURL)
+
+        let fileProvider = NSItemProvider()
+        fileProvider.registerObject(movieURL as NSURL, visibility: .all)
+        let imageProvider = NSItemProvider()
+        imageProvider.suggestedName = "Screenshot"
+        imageProvider.registerDataRepresentation(
+            forTypeIdentifier: UTType.png.identifier,
+            visibility: .all
+        ) { completion in
+            completion(tinyPNG, nil)
+            return nil
+        }
+
+        let attachments = await ComposerDropReader.attachments(
+            from: [fileProvider, imageProvider]
+        )
+
+        guard case let .fileURLs(urls) = attachments.first else {
+            Issue.record("Expected dropped file URLs first")
+            return
+        }
+        #expect(urls.map(\.lastPathComponent) == ["clip.mov"])
+        guard case let .image(data, suggestedFilename) = attachments.last else {
+            Issue.record("Expected a dropped image attachment")
+            return
+        }
+        #expect(data == tinyPNG)
+        #expect(suggestedFilename == "Screenshot.png")
+
+        let store = AppStore(conversations: [conversation(id: "C1")])
+        store.select("C1")
+        store.addComposerPasteboardAttachments(attachments, to: "C1")
+
+        #expect(
+            store.attachmentDraftState(for: "C1").attachments
+                .map(\.filename) == ["clip.mov"]
+        )
+        try await waitUntil {
+            store.attachmentDraftState(for: "C1").attachments.count == 2
+        }
+        let queued = store.attachmentDraftState(for: "C1").attachments
+        #expect(queued.map(\.filename) == ["clip.mov", "Screenshot.png"])
+        #expect(queued.map(\.kind) == [.file, .image])
+        for attachment in queued where attachment.isTemporary {
+            await ComposerAttachmentFileService.shared
+                .removeTemporaryFile(at: attachment.fileURL)
+        }
+    }
+
+    @Test
+    func droppedNonFileURLsAreIgnored() async throws {
+        let provider = NSItemProvider()
+        provider.registerObject(
+            URL(string: "https://example.test/page")! as NSURL,
+            visibility: .all
+        )
+
+        let attachments = await ComposerDropReader.attachments(from: [provider])
+
+        #expect(attachments.isEmpty)
     }
 
     @Test
@@ -382,6 +451,18 @@ struct ComposerAttachmentTests {
             withIntermediateDirectories: true
         )
         return url
+    }
+
+    private func waitUntil(
+        _ predicate: @escaping () async throws -> Bool
+    ) async throws {
+        for _ in 0 ..< 100 {
+            if try await predicate() {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for the queued attachment")
     }
 
     private var tinyPNG: Data {

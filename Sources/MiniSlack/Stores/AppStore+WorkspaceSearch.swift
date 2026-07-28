@@ -125,12 +125,10 @@ extension AppStore {
             if let conversationID = result.conversationID,
                conversations.contains(where: { $0.id == conversationID })
             {
-                select(conversationID)
                 if result.kind == .message, let messageID = result.messageID {
-                    workspaceSearchFocus = WorkspaceSearchFocus(
-                        conversationID: conversationID,
-                        messageID: messageID
-                    )
+                    openMessage(conversationID: conversationID, messageID: messageID)
+                } else {
+                    select(conversationID)
                 }
                 return nil
             }

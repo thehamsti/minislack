@@ -46,7 +46,19 @@ extension AppStore {
     }
 
     func openSavedMessage(_ savedMessage: SavedMessage) {
-        select(savedMessage.conversationID)
+        // The snapshot identifier can be stale after a history reload, so
+        // resolve the live message before focusing it.
+        guard let conversation = conversations.first(where: {
+            $0.id == savedMessage.conversationID
+        }),
+            let message = conversation.messages.first(where: {
+                savedMessage.matches(conversationID: conversation.id, message: $0)
+            })
+        else {
+            select(savedMessage.conversationID)
+            return
+        }
+        openMessage(conversationID: conversation.id, messageID: message.id)
     }
 
     func removeSavedMessage(id: String) {

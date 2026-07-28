@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ComposerTextView: NSViewRepresentable {
     @Binding var draft: ComposerDraft
@@ -274,6 +275,33 @@ fileprivate final class ComposerNSTextView: NSTextView {
             return
         }
         pasteAttachments(attachments)
+    }
+
+    /// A plain-text view would insert a dropped file's path as text, so files
+    /// and images are declined here and handled by the window drop target.
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        carriesAttachments(sender) ? [] : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        carriesAttachments(sender) ? [] : super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        carriesAttachments(sender) ? false : super.performDragOperation(sender)
+    }
+
+    private func carriesAttachments(_ sender: NSDraggingInfo) -> Bool {
+        let pasteboard = sender.draggingPasteboard
+        if pasteboard.canReadObject(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) {
+            return true
+        }
+        return pasteboard.canReadItem(
+            withDataConformingToTypes: [UTType.image.identifier]
+        )
     }
 
     override func keyDown(with event: NSEvent) {

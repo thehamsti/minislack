@@ -151,6 +151,40 @@ struct ActivityIndexTests {
         #expect(index.items.first?.date == observedAt)
     }
 
+    @Test @MainActor
+    func openingAnActivityItemFocusesItsMessage() {
+        let mention = Message(
+            author: "Maya",
+            authorUserID: "U1",
+            body: "Hi <@ME>",
+            timestamp: Date(timeIntervalSince1970: 300),
+            remoteID: "300"
+        )
+        let store = AppStore(conversations: [conversation(messages: [mention])])
+        store.resetActivity(
+            conversations: store.conversations,
+            currentUserID: "ME",
+            teamID: nil
+        )
+        let item = ActivityItem(
+            id: "C1:300:mention",
+            kind: .mention,
+            title: "Maya",
+            detail: "Hi you",
+            date: mention.timestamp,
+            conversationID: "C1",
+            conversationTitle: "general",
+            messageID: mention.id,
+            threadIdentifier: nil,
+            actorUserIDs: ["U1"]
+        )
+
+        store.openActivity(item, windowState: WindowState())
+
+        #expect(store.destination == .conversation("C1"))
+        #expect(store.workspaceSearchFocus?.messageID == mention.id)
+    }
+
     private func conversation(messages: [Message]) -> Conversation {
         Conversation(
             id: "C1",

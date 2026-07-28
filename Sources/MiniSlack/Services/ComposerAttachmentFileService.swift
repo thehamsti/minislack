@@ -1,9 +1,18 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import QuickLookThumbnailing
+
+struct CodePreviewDocument: Sendable {
+    let lines: [[CodePreviewToken]]
+    let syntaxName: String
+    let isTruncated: Bool
+}
 
 actor ComposerAttachmentFileService {
     static let shared = ComposerAttachmentFileService()
+    static let maximumPreviewByteCount = 512 * 1024
+    static let maximumPreviewLineCount = 5000
 
     private let cacheRoot: URL
 
@@ -59,6 +68,80 @@ actor ComposerAttachmentFileService {
             throw ComposerAttachmentError.fileUnavailable(url.lastPathComponent)
         }
         return thumbnail
+    }
+
+    /// Image files decode directly; movies, PDFs, and documents only render
+    /// through Quick Look.
+    func previewImage(
+        for url: URL,
+        pointSize: CGFloat,
+        scale: CGFloat
+    ) async -> CGImage? {
+        if let image = try? thumbnail(
+            for: url,
+            maximumPixelSize: Int(pointSize * scale)
+        ) {
+            return image
+        }
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: pointSize, height: pointSize),
+            scale: scale,
+            representationTypes: .thumbnail
+        )
+        return await withCheckedContinuation { continuation in
+            QLThumbnailGenerator.shared.generateBestRepresentation(
+                for: request
+            ) { representation, _ in
+                continuation.resume(returning: representation?.cgImage)
+            }
+        }
+    }
+
+    func codePreview(
+        for url: URL,
+        filename: String
+    ) -> CodePreviewDocument? {
+        guard let syntax = CodePreviewSyntax.forFilename(filename) else {
+            return nil
+        }
+        let isAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if isAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return nil
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(
+            upToCount: Self.maximumPreviewByteCount
+        ), !data.isEmpty else {
+            return nil
+        }
+        // A NUL byte means this is binary, not the text file the extension
+        // advertised.
+        guard !data.contains(0) else {
+            return nil
+        }
+        guard let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+        else {
+            return nil
+        }
+
+        let truncatedBySize = data.count == Self.maximumPreviewByteCount
+        var lines = CodePreviewHighlighter.lines(of: text, syntax: syntax)
+        let truncatedByLines = lines.count > Self.maximumPreviewLineCount
+        if truncatedByLines {
+            lines = Array(lines.prefix(Self.maximumPreviewLineCount))
+        }
+        return CodePreviewDocument(
+            lines: lines,
+            syntaxName: syntax.name,
+            isTruncated: truncatedBySize || truncatedByLines
+        )
     }
 
     func removeTemporaryFile(at url: URL) {

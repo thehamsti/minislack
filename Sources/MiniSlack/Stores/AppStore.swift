@@ -602,6 +602,16 @@ final class AppStore {
         destination = .conversation(conversationID)
     }
 
+    /// Opens a conversation positioned on one of its messages instead of the
+    /// bottom. Used by every surface that links to a specific message.
+    func openMessage(conversationID: String, messageID: UUID) {
+        select(conversationID)
+        workspaceSearchFocus = WorkspaceSearchFocus(
+            conversationID: conversationID,
+            messageID: messageID
+        )
+    }
+
     func loadInitialHistory(for conversationID: String) async {
         guard let session = try? captureWorkspaceSession() else {
             return

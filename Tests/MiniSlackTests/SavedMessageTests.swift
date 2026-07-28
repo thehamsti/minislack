@@ -153,6 +153,46 @@ struct SavedMessageTests {
         #expect(store.isMessageSaved(conversationID: "C1", message: refreshed))
     }
 
+    @Test @MainActor
+    func openingASavedMessageFocusesTheLiveMessage() throws {
+        let original = Message(
+            author: "Maya",
+            body: "Remember this",
+            timestamp: .now,
+            remoteID: "123.456"
+        )
+        let store = AppStore(conversations: [
+            Conversation(
+                id: "C1",
+                title: "general",
+                kind: .channel,
+                subtitle: nil,
+                isFavorite: false,
+                unreadCount: 0,
+                mentionCount: 0,
+                latestActivity: original.timestamp,
+                messages: [original]
+            )
+        ])
+        try store.toggleSavedMessage(conversationID: "C1", messageID: original.id)
+        let saved = try #require(store.savedMessages.first)
+
+        // A history reload rebuilds the message with a fresh UUID.
+        let reloaded = Message(
+            author: "Maya",
+            body: "Remember this",
+            timestamp: original.timestamp,
+            remoteID: "123.456"
+        )
+        store.conversations[0].messages = [reloaded]
+
+        store.openSavedMessage(saved)
+
+        #expect(store.destination == .conversation("C1"))
+        #expect(store.workspaceSearchFocus?.conversationID == "C1")
+        #expect(store.workspaceSearchFocus?.messageID == reloaded.id)
+    }
+
     private func savedMessage(remoteID: String, savedAt: Date) -> SavedMessage {
         SavedMessage(
             conversationID: "C1",

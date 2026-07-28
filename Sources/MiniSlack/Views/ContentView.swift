@@ -46,6 +46,7 @@ struct ContentView: View {
                 .allowsHitTesting(windowState.isWorkspaceSearchPresented)
                 .accessibilityHidden(!windowState.isWorkspaceSearchPresented)
         }
+        .conversationAttachmentDrop(store: store)
         .background {
             KeyboardNavigationMonitor(settings: shortcuts.settings) { action in
                 if !windowState.isQuickSwitcherPresented,

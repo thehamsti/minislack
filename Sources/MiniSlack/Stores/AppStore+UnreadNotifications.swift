@@ -20,8 +20,7 @@ extension AppStore {
     /// Opens the entry's conversation and focuses the message when it is still
     /// in loaded history.
     func openUnreadNotification(_ entry: UnreadNotificationEntry) {
-        select(entry.conversationID)
-        workspaceSearchFocus = WorkspaceSearchFocus(
+        openMessage(
             conversationID: entry.conversationID,
             messageID: entry.messageID
         )

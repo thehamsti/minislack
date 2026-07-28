@@ -26,7 +26,7 @@ extension AppStore {
     }
 
     func openActivity(_ item: ActivityItem, windowState: WindowState) {
-        select(item.conversationID)
+        openMessage(conversationID: item.conversationID, messageID: item.messageID)
         guard let threadIdentifier = item.threadIdentifier else {
             return
         }

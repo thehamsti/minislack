@@ -222,9 +222,22 @@ private struct MessageList: View {
     let findState: ConversationFindState
     let focusedMessageID: UUID?
     @State private var scrollState = ConversationScrollState()
+    @State private var settleTask: Task<Void, Never>?
 
     private static let bottomAnchorID = "conversation-bottom"
     private static let scrollCoordinateSpace = "conversation-message-list"
+    private static let settleDelay = Duration.milliseconds(32)
+
+    /// A focused message can only be scrolled to once it exists in loaded
+    /// history; until then the list stays anchored to the bottom.
+    private var loadedFocusedMessageID: UUID? {
+        guard let focusedMessageID,
+              conversation.messages.contains(where: { $0.id == focusedMessageID })
+        else {
+            return nil
+        }
+        return focusedMessageID
+    }
 
     var body: some View {
         let historyState = store.historyState(for: conversation.id)
@@ -319,18 +332,21 @@ private struct MessageList: View {
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomAnchorID)
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: MessageListBottomOffsetKey.self,
-                                        value: geometry.frame(
-                                            in: .named(Self.scrollCoordinateSpace)
-                                        ).minY
-                                    )
-                                }
-                            }
                     }
                     .padding(.vertical, 10)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: MessageListMetricsKey.self,
+                                value: MessageListMetrics(
+                                    contentHeight: geometry.size.height,
+                                    contentBottom: geometry.frame(
+                                        in: .named(Self.scrollCoordinateSpace)
+                                    ).maxY
+                                )
+                            )
+                        }
+                    }
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpace)
                 .overlay {
@@ -345,6 +361,7 @@ private struct MessageList: View {
                         isSearching: findState.isSearching
                     ) {
                         Button {
+                            settleTask?.cancel()
                             scrollState.didJumpToBottom()
                             withAnimation(.easeOut(duration: 0.18)) {
                                 proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
@@ -366,15 +383,21 @@ private struct MessageList: View {
                         .accessibilityLabel("Jump to latest message")
                     }
                 }
-                .onPreferenceChange(MessageListBottomOffsetKey.self) { offset in
-                    scrollState.updateBottomVisibility(
-                        offset <= viewport.size.height + 8
+                .onPreferenceChange(MessageListMetricsKey.self) { metrics in
+                    let needsReanchor = scrollState.updateMetrics(
+                        isBottomVisible: metrics.contentBottom
+                            <= viewport.size.height + 8,
+                        contentHeight: metrics.contentHeight
                     )
+                    if needsReanchor, !findState.isSearching {
+                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                    }
                 }
                 .onAppear {
                     scrollOnConversationFocus(proxy: proxy)
                 }
                 .onDisappear {
+                    settleTask?.cancel()
                     if store.workspaceSearchFocus?.conversationID == conversation.id {
                         store.workspaceSearchFocus = nil
                     }
@@ -406,8 +429,8 @@ private struct MessageList: View {
                         proxy.scrollTo(selectedMessageID, anchor: .center)
                     }
                 }
-                .onChange(of: focusedMessageID) {
-                    if focusedMessageID != nil {
+                .onChange(of: loadedFocusedMessageID) {
+                    if loadedFocusedMessageID != nil {
                         scrollOnConversationFocus(proxy: proxy)
                     }
                 }
@@ -416,26 +439,41 @@ private struct MessageList: View {
     }
 
     private func scrollOnConversationFocus(proxy: ScrollViewProxy) {
-        Task { @MainActor in
-            await Task.yield()
-            applyFocusScroll(proxy: proxy)
-            // LazyVStack often needs a second layout pass before scrollTo sticks.
-            await Task.yield()
-            applyFocusScroll(proxy: proxy)
+        settleTask?.cancel()
+        guard let target = scrollState.focusTarget(
+            lastMessageID: conversation.messages.last?.id,
+            focusedMessageID: loadedFocusedMessageID
+        ) else {
+            return
+        }
+        // Rows that size themselves after the first pass (rich text, avatars,
+        // media) leave a single scrollTo short of the anchor, so hold the target
+        // across the settle window. Re-applying an already reached target is a
+        // no-op, which is what keeps late growth from stranding the list.
+        settleTask = Task { @MainActor in
+            let limit = ConversationScrollState.settleAttemptLimit(for: target)
+            for attempt in 0..<limit {
+                if Task.isCancelled {
+                    return
+                }
+                apply(target, proxy: proxy)
+                if attempt + 1 < limit {
+                    try? await Task.sleep(for: Self.settleDelay)
+                }
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            scrollState.finishSettling()
         }
     }
 
-    private func applyFocusScroll(proxy: ScrollViewProxy) {
-        switch scrollState.focusTarget(
-            lastMessageID: conversation.messages.last?.id,
-            focusedMessageID: focusedMessageID
-        ) {
+    private func apply(_ target: ConversationScrollState.Target, proxy: ScrollViewProxy) {
+        switch target {
         case let .message(messageID):
             proxy.scrollTo(messageID, anchor: .center)
         case .bottom:
             proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-        case nil:
-            break
         }
     }
 
@@ -447,10 +485,21 @@ private struct MessageList: View {
     }
 }
 
-private struct MessageListBottomOffsetKey: PreferenceKey {
-    static let defaultValue = CGFloat.infinity
+private struct MessageListMetrics: Equatable {
+    let contentHeight: CGFloat
+    let contentBottom: CGFloat
+}
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+private struct MessageListMetricsKey: PreferenceKey {
+    static let defaultValue = MessageListMetrics(
+        contentHeight: 0,
+        contentBottom: .infinity
+    )
+
+    static func reduce(
+        value: inout MessageListMetrics,
+        nextValue: () -> MessageListMetrics
+    ) {
         value = nextValue()
     }
 }

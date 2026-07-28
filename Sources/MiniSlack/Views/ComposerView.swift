@@ -12,7 +12,6 @@ struct ComposerView: View {
     @State private var dismissedQuery: ComposerQuery?
     @State private var isSchedulePopoverPresented = false
     @State private var isScheduledMessagesPresented = false
-    @State private var isDropTargeted = false
     @State private var isEditorFocused = false
     @State private var isFormattingHovered = false
     @State private var isSendHovered = false
@@ -129,23 +128,12 @@ struct ComposerView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(
-                    isDropTargeted
-                        ? Color.orange
-                        : isEditorFocused
-                            ? Color.primary.opacity(0.3)
-                            : Color(nsColor: .separatorColor),
-                    lineWidth: isDropTargeted ? 1.5 : 0.5
+                    isEditorFocused
+                        ? Color.primary.opacity(0.3)
+                        : Color(nsColor: .separatorColor),
+                    lineWidth: 0.5
                 )
                 .animation(.easeInOut(duration: 0.15), value: isEditorFocused)
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            guard !urls.isEmpty else {
-                return false
-            }
-            store.addComposerAttachments(urls, to: conversation.id)
-            return true
-        } isTargeted: {
-            isDropTargeted = $0
         }
         .padding(10)
     }
