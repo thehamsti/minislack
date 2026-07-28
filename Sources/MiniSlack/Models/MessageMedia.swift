@@ -312,6 +312,10 @@ struct MessageFile: Codable, Hashable, Sendable, Identifiable {
         mimeType?.hasPrefix("image/") == true
     }
 
+    var inlinePreviewSource: MessageMediaSource? {
+        mimeType?.hasPrefix("video/") == true ? contentSource : nil
+    }
+
     var displayName: String {
         title.isEmpty ? name : title
     }

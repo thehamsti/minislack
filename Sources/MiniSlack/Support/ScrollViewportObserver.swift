@@ -62,6 +62,7 @@ struct ScrollViewportObserver: NSViewRepresentable {
         var bottomTolerance: CGFloat
         var onPositionChange: (Bool) -> Void
         private weak var scrollView: NSScrollView?
+        private var positionReportTask: Task<Void, Never>?
 
         init(
             bottomTolerance: CGFloat,
@@ -93,11 +94,20 @@ struct ScrollViewportObserver: NSViewRepresentable {
 
         func disconnect() {
             NotificationCenter.default.removeObserver(self)
+            positionReportTask?.cancel()
+            positionReportTask = nil
             scrollView = nil
         }
 
         @objc private func boundsDidChange(_ notification: Notification) {
-            reportPosition()
+            positionReportTask?.cancel()
+            positionReportTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.reportPosition()
+            }
         }
 
         private func reportPosition() {

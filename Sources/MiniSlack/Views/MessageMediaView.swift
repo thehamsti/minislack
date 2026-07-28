@@ -266,6 +266,9 @@ private struct MessageAttachmentCard: View {
 
 private struct MessageFileCard: View {
     let file: MessageFile
+    @State private var previewURL: URL?
+    @State private var previewErrorMessage: String?
+    @State private var isPreparingPreview = false
 
     private var displayImageSource: MessageMediaSource? {
         guard file.isImage else { return nil }
@@ -301,7 +304,17 @@ private struct MessageFileCard: View {
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    if let permalink = file.permalink {
+                    if file.inlinePreviewSource != nil {
+                        Button(file.displayName) {
+                            previewVideo()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .disabled(isPreparingPreview)
+                        .help("Preview \(file.displayName)")
+                        .accessibilityHint("Opens the video preview")
+                    } else if let permalink = file.permalink {
                         Link(file.displayName, destination: permalink)
                             .font(.callout.weight(.semibold))
                     } else {
@@ -340,6 +353,18 @@ private struct MessageFileCard: View {
             in: RoundedRectangle(cornerRadius: file.isImage ? 8 : 6, style: .continuous)
         )
         .accessibilityElement(children: .contain)
+        .quickLookPreview($previewURL)
+        .alert(
+            "Preview failed",
+            isPresented: Binding(
+                get: { previewErrorMessage != nil },
+                set: { if !$0 { previewErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(previewErrorMessage ?? "")
+        }
     }
 
     private var fileIcon: String {
@@ -362,6 +387,25 @@ private struct MessageFileCard: View {
             return "doc.text"
         }
         return "doc"
+    }
+
+    private func previewVideo() {
+        guard let source = file.inlinePreviewSource, !isPreparingPreview else {
+            return
+        }
+        isPreparingPreview = true
+        Task {
+            do {
+                previewURL = try await SlackFileTransferService.shared.localURL(
+                    for: source,
+                    suggestedName: file.name,
+                    cacheKey: file.id
+                )
+            } catch {
+                previewErrorMessage = error.localizedDescription
+            }
+            isPreparingPreview = false
+        }
     }
 }
 

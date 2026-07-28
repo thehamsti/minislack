@@ -138,6 +138,41 @@ struct MessageMediaTests {
     }
 
     @Test
+    func videoFileLinkUsesAuthenticatedContentForInlinePreview() throws {
+        let json = """
+        {
+          "ts": "1753725012.000100",
+          "user": "U01V9QHH1AR",
+          "files": [
+            {
+              "id": "F0BMA064HR6",
+              "name": "k16_canvas_backup_animated_demo.mp4",
+              "title": "k16_canvas_backup_animated_demo.mp4",
+              "mimetype": "video/mp4",
+              "pretty_type": "MPEG 4 video",
+              "mode": "hosted",
+              "is_external": false,
+              "url_private_download": "https://files.slack.com/files-pri/T1-F0BMA064HR6/download/k16_canvas_backup_animated_demo.mp4",
+              "permalink": "https://k16solutions.slack.com/files/U01V9QHH1AR/F0BMA064HR6/k16_canvas_backup_animated_demo.mp4"
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(
+            SlackMessageDTO.self,
+            from: Data(json.utf8)
+        )
+        let file = try #require(
+            dto.message(users: [:], currentUserID: "").files.first
+        )
+
+        #expect(file.inlinePreviewSource == file.contentSource)
+        #expect(file.inlinePreviewSource?.requiresSlackAuthorization == true)
+        #expect(file.inlinePreviewSource?.url.host == "files.slack.com")
+        #expect(file.permalink?.host == "k16solutions.slack.com")
+    }
+
+    @Test
     func decodesClassicFooterIconAndMrkdwnFooterLinks() throws {
         let json = """
         {

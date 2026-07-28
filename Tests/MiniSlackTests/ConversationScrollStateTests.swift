@@ -1,8 +1,41 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MiniSlack
 
 struct ConversationScrollStateTests {
+    @Test @MainActor
+    func viewportObserverDefersBoundsReportsUntilScrollUpdatesFinish() async {
+        let scrollView = NSScrollView(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 500)
+        )
+        scrollView.documentView = NSView(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 1_000)
+        )
+        var reportCount = 0
+        let coordinator = ScrollViewportObserver.Coordinator(
+            bottomTolerance: 1
+        ) { _ in
+            reportCount += 1
+        }
+        coordinator.connect(scrollView)
+
+        #expect(reportCount == 1)
+
+        NotificationCenter.default.post(
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+
+        #expect(reportCount == 1)
+
+        for _ in 0..<10 where reportCount == 1 {
+            await Task.yield()
+        }
+
+        #expect(reportCount == 2)
+    }
+
     @Test
     func scrollViewportPositionHandlesFlippedConversationCoordinates() {
         #expect(
