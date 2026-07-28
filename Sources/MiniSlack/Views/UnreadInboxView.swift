@@ -14,11 +14,7 @@ struct UnreadInboxView: View {
             }
 
             if store.unreadConversations.isEmpty {
-                ContentUnavailableView(
-                    "You’re all caught up",
-                    systemImage: "checkmark.circle.fill",
-                    description: Text("New unread conversations will appear here.")
-                )
+                UnreadEmptyState()
             } else if store.filteredUnreadConversations.isEmpty {
                 UnreadNoMatchesView {
                     store.unreadFilters.clearActiveFilters()
@@ -27,6 +23,7 @@ struct UnreadInboxView: View {
                 conversationList
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
     }
 
@@ -160,6 +157,51 @@ private struct UnreadHeader: View {
         .overlay(alignment: .bottom) {
             Divider()
         }
+    }
+}
+
+private struct UnreadEmptyState: View {
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(Color.orange.opacity(0.12))
+                    .frame(width: 76, height: 76)
+
+                Circle()
+                    .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
+                    .frame(width: 62, height: 62)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 27, weight: .bold))
+                    .foregroundStyle(.orange)
+            }
+            .accessibilityHidden(true)
+
+            VStack(spacing: 6) {
+                Text("You’re all caught up")
+                    .font(.title3.bold())
+
+                Text("There are no unread conversations right now.\nNew messages will appear here as they arrive.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.orange.opacity(0.055),
+                    Color.clear,
+                ],
+                startPoint: .top,
+                endPoint: .center
+            )
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
