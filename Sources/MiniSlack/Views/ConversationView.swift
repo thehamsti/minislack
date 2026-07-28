@@ -416,7 +416,7 @@ private struct MessageList: View {
                     if !scrollState.hasPositionedInitially {
                         scrollOnConversationFocus(proxy: proxy)
                     } else {
-                        followLatestIfNeeded(proxy: proxy)
+                        settleLatestIfNeeded(proxy: proxy)
                     }
                 }
                 .onChange(of: conversation.messages.count) {
@@ -439,13 +439,29 @@ private struct MessageList: View {
     }
 
     private func scrollOnConversationFocus(proxy: ScrollViewProxy) {
-        settleTask?.cancel()
         guard let target = scrollState.focusTarget(
             lastMessageID: conversation.messages.last?.id,
             focusedMessageID: loadedFocusedMessageID
         ) else {
             return
         }
+        settle(target, proxy: proxy)
+    }
+
+    private func settleLatestIfNeeded(proxy: ScrollViewProxy) {
+        guard let target = scrollState.latestMessageTarget(
+            isSearching: findState.isSearching
+        ) else {
+            return
+        }
+        settle(target, proxy: proxy)
+    }
+
+    private func settle(
+        _ target: ConversationScrollState.Target,
+        proxy: ScrollViewProxy
+    ) {
+        settleTask?.cancel()
         // Rows that size themselves after the first pass (rich text, avatars,
         // media) leave a single scrollTo short of the anchor, so hold the target
         // across the settle window. Re-applying an already reached target is a

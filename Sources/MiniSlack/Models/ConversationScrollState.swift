@@ -102,6 +102,15 @@ struct ConversationScrollState: Equatable, Sendable {
         return isAtBottom || pendingTarget == .bottom
     }
 
+    mutating func latestMessageTarget(isSearching: Bool) -> Target? {
+        guard shouldFollowLatest(isSearching: isSearching) else {
+            return nil
+        }
+        isAtBottom = true
+        pendingTarget = .bottom
+        return .bottom
+    }
+
     func showsJumpToBottom(hasMessages: Bool, isSearching: Bool) -> Bool {
         hasMessages
             && hasPositionedInitially

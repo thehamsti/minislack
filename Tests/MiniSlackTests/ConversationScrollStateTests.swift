@@ -50,8 +50,10 @@ struct ConversationScrollStateTests {
         state.finishSettling()
         _ = state.updateMetrics(isBottomVisible: true, contentHeight: 900)
 
-        #expect(state.shouldFollowLatest(isSearching: false))
+        #expect(state.latestMessageTarget(isSearching: false) == .bottom)
+        #expect(state.pendingTarget == .bottom)
         #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: false))
+        state.finishSettling()
 
         // Same content height with the anchor gone: the user scrolled up.
         let reanchorsOnManualScroll = state.updateMetrics(
@@ -62,12 +64,32 @@ struct ConversationScrollStateTests {
         #expect(!reanchorsOnManualScroll)
 
         #expect(!state.shouldFollowLatest(isSearching: false))
+        #expect(state.latestMessageTarget(isSearching: false) == nil)
         #expect(state.showsJumpToBottom(hasMessages: true, isSearching: false))
         #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: true))
 
         state.didJumpToBottom()
 
         #expect(state.shouldFollowLatest(isSearching: false))
+        #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: false))
+    }
+
+    @Test
+    func newMessageKeepsTheJumpButtonHiddenWhileBottomSettles() {
+        var state = ConversationScrollState()
+        _ = state.initialTarget(lastMessageID: UUID(), focusedMessageID: nil)
+        state.finishSettling()
+        _ = state.updateMetrics(isBottomVisible: true, contentHeight: 900)
+
+        #expect(state.latestMessageTarget(isSearching: false) == .bottom)
+
+        let reanchorsDuringRowLayout = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 1_040
+        )
+
+        #expect(reanchorsDuringRowLayout)
+        #expect(state.isAtBottom)
         #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: false))
     }
 
