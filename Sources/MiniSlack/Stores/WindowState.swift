@@ -8,6 +8,7 @@ final class WindowState {
     var isWorkspaceSearchPresented = false
     var isUnreadNotificationsPresented = false
     var selectedThread: ThreadIdentifier?
+    private(set) var composerFocusRequestID = 0
 
     func toggleCompactSidebar() {
         isCompactSidebarPresented.toggle()
@@ -55,5 +56,9 @@ final class WindowState {
 
     func dismissThread() {
         selectedThread = nil
+    }
+
+    func requestComposerFocus() {
+        composerFocusRequestID += 1
     }
 }

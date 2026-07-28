@@ -43,4 +43,16 @@ struct WindowStateTests {
         #expect(!state.isCompactSidebarPresented)
         #expect(state.isWorkspaceSearchPresented)
     }
+
+    @Test
+    func composerFocusRequestsAdvanceForRepeatedShortcuts() {
+        let state = WindowState()
+
+        #expect(state.composerFocusRequestID == 0)
+
+        state.requestComposerFocus()
+        state.requestComposerFocus()
+
+        #expect(state.composerFocusRequestID == 2)
+    }
 }

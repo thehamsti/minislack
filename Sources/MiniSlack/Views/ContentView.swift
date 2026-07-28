@@ -52,6 +52,12 @@ struct ContentView: View {
                 if !windowState.isQuickSwitcherPresented,
                    !windowState.isWorkspaceSearchPresented
                 {
+                    if action == .focusComposer {
+                        if store.selectedConversation != nil {
+                            windowState.requestComposerFocus()
+                        }
+                        return
+                    }
                     if action == .back, windowState.isCompactSidebarPresented {
                         windowState.dismissCompactSidebar()
                         return

@@ -5,6 +5,7 @@ import SwiftUI
 struct ComposerView: View {
     let store: AppStore
     let conversation: Conversation
+    let focusRequestID: String?
     var onEscape: (() -> Void)? = nil
     @State private var selection = NSRange(location: 0, length: 0)
     @State private var editorHeight: CGFloat = 24
@@ -226,6 +227,7 @@ struct ComposerView: View {
                 height: $editorHeight,
                 suggestionsVisible: suggestionsVisible,
                 accessibilityLabel: "Message \(conversation.title)",
+                focusRequestID: focusRequestID,
                 pasteAttachments: {
                     store.addComposerPasteboardAttachments(
                         $0,

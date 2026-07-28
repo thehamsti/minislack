@@ -172,7 +172,7 @@ enum KeyboardCommandSection: String, CaseIterable, Identifiable, Sendable {
         case .commands:
             "Commands"
         case .navigation:
-            "List navigation"
+            "Navigation"
         }
     }
 
@@ -181,7 +181,7 @@ enum KeyboardCommandSection: String, CaseIterable, Identifiable, Sendable {
         case .commands:
             "Menu commands. Each needs at least one of ⌘, ⌃, or ⌥."
         case .navigation:
-            "Single keys, active while a list has focus and you are not typing. Arrow keys, Return, and Esc always work too."
+            "Single keys, active while you are not typing. Arrow keys, Return, and Esc always work too."
         }
     }
 }
@@ -200,6 +200,7 @@ enum KeyboardCommand: String, CaseIterable, Identifiable, Codable, Sendable {
     case openSelection
     case goBack
     case markSelectionRead
+    case focusComposer
 
     var id: String { rawValue }
 
@@ -231,6 +232,8 @@ enum KeyboardCommand: String, CaseIterable, Identifiable, Codable, Sendable {
             "Go back"
         case .markSelectionRead:
             "Mark selection read"
+        case .focusComposer:
+            "Focus message input"
         }
     }
 
@@ -239,7 +242,8 @@ enum KeyboardCommand: String, CaseIterable, Identifiable, Codable, Sendable {
         case .quickSwitcher, .findInConversation, .searchWorkspace, .unreadInbox,
              .unreadNotifications, .nextUnread, .previousUnread, .markConversationRead:
             .commands
-        case .moveNext, .movePrevious, .openSelection, .goBack, .markSelectionRead:
+        case .moveNext, .movePrevious, .openSelection, .goBack, .markSelectionRead,
+             .focusComposer:
             .navigation
         }
     }
@@ -272,6 +276,8 @@ enum KeyboardCommand: String, CaseIterable, Identifiable, Codable, Sendable {
             .character("h")
         case .markSelectionRead:
             .character("r")
+        case .focusComposer:
+            .character("/")
         }
     }
 
@@ -288,6 +294,8 @@ enum KeyboardCommand: String, CaseIterable, Identifiable, Codable, Sendable {
             .back
         case .markSelectionRead:
             .markRead
+        case .focusComposer:
+            .focusComposer
         default:
             nil
         }

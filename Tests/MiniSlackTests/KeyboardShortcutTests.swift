@@ -35,6 +35,20 @@ struct KeyboardShortcutTests {
     }
 
     @Test
+    func focusComposerDefaultsToSlashAndCanBeCustomized() throws {
+        var settings = KeyboardShortcutSettings()
+
+        #expect(KeyboardCommand.focusComposer.section == .navigation)
+        #expect(settings.binding(for: .focusComposer) == .character("/"))
+        #expect(settings.navigationAction(for: .character("/")) == .focusComposer)
+
+        _ = try settings.assign(.character("c"), to: .focusComposer).get()
+
+        #expect(settings.navigationAction(for: .character("/")) == nil)
+        #expect(settings.navigationAction(for: .character("c")) == .focusComposer)
+    }
+
+    @Test
     func assigningAnOverrideResolvesAndPersists() throws {
         var settings = KeyboardShortcutSettings()
         let binding = KeyBinding.character("i", [.command, .option])

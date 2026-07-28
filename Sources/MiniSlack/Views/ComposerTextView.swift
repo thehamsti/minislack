@@ -8,6 +8,7 @@ struct ComposerTextView: NSViewRepresentable {
     @Binding var height: CGFloat
     let suggestionsVisible: Bool
     let accessibilityLabel: String
+    let focusRequestID: String?
     let pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)?
     let moveSuggestion: (Int) -> Void
     let acceptSuggestion: () -> Void
@@ -23,6 +24,7 @@ struct ComposerTextView: NSViewRepresentable {
         height: Binding<CGFloat>,
         suggestionsVisible: Bool,
         accessibilityLabel: String,
+        focusRequestID: String? = nil,
         pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)? = nil,
         moveSuggestion: @escaping (Int) -> Void,
         acceptSuggestion: @escaping () -> Void,
@@ -37,6 +39,7 @@ struct ComposerTextView: NSViewRepresentable {
         _height = height
         self.suggestionsVisible = suggestionsVisible
         self.accessibilityLabel = accessibilityLabel
+        self.focusRequestID = focusRequestID
         self.pasteAttachments = pasteAttachments
         self.moveSuggestion = moveSuggestion
         self.acceptSuggestion = acceptSuggestion
@@ -110,6 +113,7 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.applyTagAttributes(to: textView)
         context.coordinator.isApplyingUpdate = false
         context.coordinator.updateHeight(for: textView, deferred: true)
+        context.coordinator.applyFocusRequest(to: textView)
     }
 
     @MainActor
@@ -122,6 +126,7 @@ struct ComposerTextView: NSViewRepresentable {
         var parent: ComposerTextView
         var isApplyingUpdate = false
         private var pendingEdit: PendingEdit?
+        private var appliedFocusRequestID: String?
 
         init(parent: ComposerTextView) {
             self.parent = parent
@@ -137,6 +142,16 @@ struct ComposerTextView: NSViewRepresentable {
             textView.send = parent.send
             textView.onEscape = parent.onEscape
             textView.setAccessibilityLabel(parent.accessibilityLabel)
+        }
+
+        fileprivate func applyFocusRequest(to textView: ComposerNSTextView) {
+            guard let focusRequestID = parent.focusRequestID,
+                  focusRequestID != appliedFocusRequestID
+            else {
+                return
+            }
+            appliedFocusRequestID = focusRequestID
+            textView.requestFocus()
         }
 
         func textView(
@@ -252,7 +267,7 @@ struct ComposerTextView: NSViewRepresentable {
 }
 
 @MainActor
-fileprivate final class ComposerNSTextView: NSTextView {
+final class ComposerNSTextView: NSTextView {
     var suggestionsVisible = false
     var pasteAttachments: (([ComposerPasteboardAttachment]) -> Void)?
     var moveSuggestion: ((Int) -> Void)?
@@ -261,6 +276,25 @@ fileprivate final class ComposerNSTextView: NSTextView {
     var format: ((ComposerFormatting) -> Void)?
     var send: (() -> Void)?
     var onEscape: (() -> Void)?
+    private var hasPendingFocusRequest = false
+
+    func requestFocus() {
+        hasPendingFocusRequest = true
+        applyPendingFocusRequest()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyPendingFocusRequest()
+    }
+
+    private func applyPendingFocusRequest() {
+        guard hasPendingFocusRequest, let window else {
+            return
+        }
+        hasPendingFocusRequest = false
+        window.makeFirstResponder(self)
+    }
 
     override func paste(_ sender: Any?) {
         guard let pasteAttachments else {

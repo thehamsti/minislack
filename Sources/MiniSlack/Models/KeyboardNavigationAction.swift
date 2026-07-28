@@ -4,4 +4,5 @@ enum KeyboardNavigationAction: Sendable {
     case open
     case back
     case markRead
+    case focusComposer
 }

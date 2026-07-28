@@ -982,6 +982,8 @@ final class AppStore {
             showUnreadInbox()
         case .markRead:
             markKeyboardSelectionRead()
+        case .focusComposer:
+            break
         }
     }
 

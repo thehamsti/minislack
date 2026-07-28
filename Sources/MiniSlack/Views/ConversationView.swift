@@ -97,6 +97,7 @@ struct ConversationView: View {
             ComposerView(
                 store: store,
                 conversation: conversation,
+                focusRequestID: "\(conversation.id):\(windowState.composerFocusRequestID)",
                 onEscape: handleEscape
             )
         }
