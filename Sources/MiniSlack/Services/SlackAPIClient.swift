@@ -913,12 +913,14 @@ struct SlackPresenceResponse: Decodable, SlackResponse {
 
 struct SlackDoNotDisturbStatus: Decodable {
     let isEnabled: Bool
+    let nextStartTimestamp: Int?
     let nextEndTimestamp: Int?
     let isSnoozed: Bool
     let snoozeEndTimestamp: Int?
 
     enum CodingKeys: String, CodingKey {
         case isEnabled = "dnd_enabled"
+        case nextStartTimestamp = "next_dnd_start_ts"
         case nextEndTimestamp = "next_dnd_end_ts"
         case isSnoozed = "snooze_enabled"
         case snoozeEndTimestamp = "snooze_endtime"
@@ -927,6 +929,7 @@ struct SlackDoNotDisturbStatus: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        nextStartTimestamp = try container.decodeIfPresent(Int.self, forKey: .nextStartTimestamp)
         nextEndTimestamp = try container.decodeIfPresent(Int.self, forKey: .nextEndTimestamp)
         isSnoozed = try container.decodeIfPresent(Bool.self, forKey: .isSnoozed) ?? false
         snoozeEndTimestamp = try container.decodeIfPresent(
@@ -936,18 +939,30 @@ struct SlackDoNotDisturbStatus: Decodable {
     }
 
     var doNotDisturb: UserDoNotDisturb {
-        let active = isEnabled || isSnoozed
-        let endTimestamp = isSnoozed
-            ? snoozeEndTimestamp ?? nextEndTimestamp
-            : nextEndTimestamp
+        // Snooze is an immediate override; scheduled DND is a window bounded by
+        // next_dnd_start_ts / next_dnd_end_ts (Slack returns the next window when
+        // the user is not currently inside one).
+        if isSnoozed {
+            let endTimestamp = snoozeEndTimestamp ?? nextEndTimestamp
+            return UserDoNotDisturb(
+                isEnabled: true,
+                endsAt: endTimestamp.flatMap(Self.slackTimestampDate(from:)),
+                startsAt: nil
+            )
+        }
+
+        let startsAt = nextStartTimestamp.flatMap(Self.slackTimestampDate(from:))
+        let endsAt = nextEndTimestamp.flatMap(Self.slackTimestampDate(from:))
         return UserDoNotDisturb(
-            isEnabled: active,
-            endsAt: active
-                ? endTimestamp.flatMap {
-                    $0 > 1 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil
-                }
-                : nil
+            isEnabled: isEnabled,
+            endsAt: endsAt,
+            startsAt: startsAt
         )
+    }
+
+    /// Slack uses `1` as a sentinel when the user has no DND schedule.
+    private static func slackTimestampDate(from timestamp: Int) -> Date? {
+        timestamp > 1 ? Date(timeIntervalSince1970: TimeInterval(timestamp)) : nil
     }
 }
 

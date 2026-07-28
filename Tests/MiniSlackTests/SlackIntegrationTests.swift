@@ -484,7 +484,18 @@ struct SlackIntegrationTests {
                       "users": {
                         "U0": {
                           "dnd_enabled": true,
+                          "next_dnd_start_ts": 1899996400,
                           "next_dnd_end_ts": 1900000000
+                        },
+                        "U1": {
+                          "dnd_enabled": true,
+                          "next_dnd_start_ts": 1900003600,
+                          "next_dnd_end_ts": 1900007200
+                        },
+                        "U2": {
+                          "dnd_enabled": false,
+                          "next_dnd_start_ts": 1,
+                          "next_dnd_end_ts": 1
                         }
                       }
                     }
@@ -500,6 +511,7 @@ struct SlackIntegrationTests {
                     {
                       "ok": true,
                       "dnd_enabled": false,
+                      "next_dnd_start_ts": 1,
                       "next_dnd_end_ts": 1,
                       "snooze_enabled": true,
                       "snooze_endtime": 1900000100
@@ -517,10 +529,33 @@ struct SlackIntegrationTests {
             accessToken: token
         )
 
+        let insideWindow = Date(timeIntervalSince1970: 1_899_998_000)
+        let outsideWindow = Date(timeIntervalSince1970: 1_900_001_000)
+        let duringSnooze = Date(timeIntervalSince1970: 1_900_000_050)
+
         #expect(statuses["U0"]?.isEnabled == true)
+        #expect(statuses["U0"]?.startsAt == Date(timeIntervalSince1970: 1_899_996_400))
         #expect(statuses["U0"]?.endsAt == Date(timeIntervalSince1970: 1_900_000_000))
+        #expect(statuses["U0"]?.isActive(at: insideWindow) == true)
+        #expect(statuses["U0"]?.isActive(at: outsideWindow) == false)
+
+        // Next overnight window only — not currently in DND.
+        #expect(statuses["U1"]?.isEnabled == true)
+        #expect(statuses["U1"]?.isActive(at: outsideWindow) == false)
+        #expect(
+            statuses["U1"]?.isActive(at: Date(timeIntervalSince1970: 1_900_004_000)) == true
+        )
+
+        #expect(statuses["U2"]?.isEnabled == false)
+        #expect(statuses["U2"]?.startsAt == nil)
+        #expect(statuses["U2"]?.endsAt == nil)
+        #expect(statuses["U2"]?.isActive(at: outsideWindow) == false)
+
         #expect(statuses["U50"]?.isEnabled == true)
+        #expect(statuses["U50"]?.startsAt == nil)
         #expect(statuses["U50"]?.endsAt == Date(timeIntervalSince1970: 1_900_000_100))
+        #expect(statuses["U50"]?.isActive(at: duringSnooze) == true)
+        #expect(statuses["U50"]?.isActive(at: outsideWindow) == false)
     }
 
     @Test

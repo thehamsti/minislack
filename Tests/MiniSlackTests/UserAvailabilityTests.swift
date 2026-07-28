@@ -40,6 +40,35 @@ struct UserAvailabilityTests {
     }
 
     @Test
+    func scheduledDoNotDisturbIsInactiveBeforeTheWindowStarts() {
+        // Slack often returns dnd_enabled + the *next* overnight window while
+        // the user is free during the workday. Without a start bound, every
+        // scheduled user looks like they are currently in DND.
+        let doNotDisturb = UserDoNotDisturb(
+            isEnabled: true,
+            endsAt: now.addingTimeInterval(36_000),
+            startsAt: now.addingTimeInterval(28_800)
+        )
+
+        #expect(!doNotDisturb.isActive(at: now))
+        #expect(doNotDisturb.isActive(at: now.addingTimeInterval(28_800)))
+        #expect(doNotDisturb.isActive(at: now.addingTimeInterval(30_000)))
+        #expect(!doNotDisturb.isActive(at: now.addingTimeInterval(36_000)))
+    }
+
+    @Test
+    func snoozeDoNotDisturbWithoutStartRemainsActiveUntilEnd() {
+        let doNotDisturb = UserDoNotDisturb(
+            isEnabled: true,
+            endsAt: now.addingTimeInterval(3_600),
+            startsAt: nil
+        )
+
+        #expect(doNotDisturb.isActive(at: now))
+        #expect(!doNotDisturb.isActive(at: now.addingTimeInterval(3_600)))
+    }
+
+    @Test
     func displayAndAccessibilityPreserveIndependentAvailabilitySignals() {
         let availability = UserAvailability(
             presence: .active,

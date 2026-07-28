@@ -48,6 +48,7 @@ capability parity, not Slack's layout.
 - [x] Offline workspace full-text search
 - [x] Remote message/file search plus local person/channel search
 - [x] Mentions, reactions, and followed-thread activity inbox
+- [x] Conversation-header unread bell with a bounded jump-to-message dropdown
 
 ## Composer and files
 

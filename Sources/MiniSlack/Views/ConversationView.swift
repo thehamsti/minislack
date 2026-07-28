@@ -73,7 +73,8 @@ struct ConversationView: View {
                 store: store,
                 windowState: windowState,
                 conversation: conversation,
-                compact: compact
+                compact: compact,
+                presentFind: presentFind
             )
             if isFindPresented {
                 ConversationFindBar(
@@ -211,72 +212,6 @@ private struct ConversationFindBar: View {
             return "No matches"
         }
         return "\(selectedResultNumber) of \(state.matchIDs.count)"
-    }
-}
-
-private struct ConversationHeader: View {
-    let store: AppStore
-    let windowState: WindowState
-    let conversation: Conversation
-    let compact: Bool
-
-    var body: some View {
-        HStack(spacing: 9) {
-            if compact {
-                Button {
-                    store.showUnreadInbox()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(.borderless)
-                .help("Back to unreads (Esc)")
-            }
-
-            if conversation.isDirectMessage {
-                ConversationAvatar(store: store, conversation: conversation, size: 28)
-            } else {
-                Image(systemName: conversation.systemImage)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(conversation.title)
-                    .font(.headline)
-                if let userID = conversation.participantUserID,
-                   let user = store.user(withID: userID)
-                {
-                    UserStatusLabel(
-                        user: user,
-                        customEmojiURLs: store.customEmojiURLs
-                    )
-                } else if let subtitle = conversation.subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            if compact {
-                ConversationManagementMenu(store: store)
-            }
-
-            Button {
-                windowState.presentQuickSwitcher()
-            } label: {
-                Image(systemName: "magnifyingglass")
-            }
-            .buttonStyle(.borderless)
-            .help("Quick switcher (⌘K)")
-        }
-        .padding(.horizontal, compact ? 12 : 16)
-        .padding(.vertical, 10)
-        .background(.bar)
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
     }
 }
 

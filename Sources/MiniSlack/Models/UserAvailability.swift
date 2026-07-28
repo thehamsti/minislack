@@ -35,10 +35,31 @@ struct UserCustomStatus: Codable, Hashable, Sendable {
 
 struct UserDoNotDisturb: Codable, Hashable, Sendable {
     let isEnabled: Bool
+    /// Start of the current or next scheduled DND window from Slack
+    /// (`next_dnd_start_ts`). Nil for snooze-only state or legacy cache.
+    let startsAt: Date?
     let endsAt: Date?
 
+    init(isEnabled: Bool, endsAt: Date?, startsAt: Date? = nil) {
+        self.isEnabled = isEnabled
+        self.startsAt = startsAt
+        self.endsAt = endsAt
+    }
+
     func isActive(at date: Date) -> Bool {
-        isEnabled && (endsAt.map { date < $0 } ?? true)
+        guard isEnabled else {
+            return false
+        }
+        // Slack always reports the next (or current) DND window timestamps.
+        // Outside the window, `dnd_enabled` is sometimes still true for users
+        // with a schedule — require the current time to fall within [start, end).
+        if let startsAt, date < startsAt {
+            return false
+        }
+        if let endsAt, date >= endsAt {
+            return false
+        }
+        return true
     }
 }
 
