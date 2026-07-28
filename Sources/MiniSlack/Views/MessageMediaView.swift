@@ -22,6 +22,7 @@ struct MessageIntegrationBadge: View {
 struct MessageMediaView: View {
     let message: Message
     let customEmojiURLs: [String: URL]
+    var continueInSlack: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -37,7 +38,147 @@ struct MessageMediaView: View {
             ForEach(Array(message.images.enumerated()), id: \.offset) { _, image in
                 MessageImageCard(image: image)
             }
+            if !message.actions.isEmpty {
+                SlackMessageActionRow(
+                    actions: message.actions,
+                    continueInSlack: continueInSlack
+                )
+            }
         }
+    }
+}
+
+private struct SlackMessageActionRow: View {
+    let actions: [SlackMessageAction]
+    let continueInSlack: (() -> Void)?
+    @Environment(\.openURL) private var openURL
+    @State private var pendingAction: SlackMessageAction?
+
+    var body: some View {
+        SlackActionFlowLayout(spacing: 6) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                actionButton(action)
+            }
+        }
+        .alert(
+            pendingAction?.confirmation?.title ?? "Confirm action",
+            isPresented: Binding(
+                get: { pendingAction != nil },
+                set: { if !$0 { pendingAction = nil } }
+            ),
+            presenting: pendingAction
+        ) { action in
+            let confirmation = action.confirmation
+            Button(
+                confirmation?.confirmLabel ?? "Continue",
+                role: confirmation?.isDestructive == true ? .destructive : nil
+            ) {
+                perform(action)
+                pendingAction = nil
+            }
+            Button(confirmation?.cancelLabel ?? "Cancel", role: .cancel) {
+                pendingAction = nil
+            }
+        } message: { action in
+            Text(action.confirmation?.message ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: SlackMessageAction) -> some View {
+        let button = Button {
+            if action.confirmation == nil {
+                perform(action)
+            } else {
+                pendingAction = action
+            }
+        } label: {
+            Text(action.label)
+                .lineLimit(1)
+        }
+        .controlSize(.small)
+        .disabled(action.destination == nil && continueInSlack == nil)
+        .accessibilityLabel(action.accessibilityLabel ?? action.label)
+        .help(action.destination == nil ? "Continue this action in Slack" : action.label)
+
+        switch action.style {
+        case .standard:
+            button.buttonStyle(.bordered)
+        case .primary:
+            button
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+        case .danger:
+            button
+                .buttonStyle(.bordered)
+                .tint(.red)
+        }
+    }
+
+    private func perform(_ action: SlackMessageAction) {
+        if let destination = action.destination {
+            openURL(destination)
+        } else {
+            continueInSlack?()
+        }
+    }
+}
+
+private struct SlackActionFlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(subviews: subviews, width: proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(subviews: subviews, width: bounds.width)
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        subviews: Subviews,
+        width: CGFloat
+    ) -> (size: CGSize, points: [CGPoint]) {
+        var points: [CGPoint] = []
+        var origin = CGPoint.zero
+        var rowHeight: CGFloat = 0
+        var contentWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if origin.x > 0, origin.x + size.width > width {
+                origin.x = 0
+                origin.y += rowHeight + spacing
+                rowHeight = 0
+            }
+            points.append(origin)
+            origin.x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            contentWidth = max(contentWidth, min(width, origin.x - spacing))
+        }
+
+        return (
+            CGSize(
+                width: contentWidth,
+                height: subviews.isEmpty ? 0 : origin.y + rowHeight
+            ),
+            points
+        )
     }
 }
 

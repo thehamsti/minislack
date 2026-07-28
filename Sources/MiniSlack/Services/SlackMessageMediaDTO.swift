@@ -31,6 +31,7 @@ struct SlackAttachmentDTO: Decodable {
     let footerIcon: String?
     let timestamp: Double?
     let blocks: [SlackRichTextNode]?
+    let actions: [SlackRichTextNode]?
 
     enum CodingKeys: String, CodingKey {
         case fallback
@@ -51,6 +52,7 @@ struct SlackAttachmentDTO: Decodable {
         case footerIcon = "footer_icon"
         case timestamp = "ts"
         case blocks
+        case actions
     }
 
     init(from decoder: Decoder) throws {
@@ -92,6 +94,10 @@ struct SlackAttachmentDTO: Decodable {
         blocks = (try? container.decodeIfPresent(
             [SlackRichTextNode].self,
             forKey: .blocks
+        )) ?? nil
+        actions = (try? container.decodeIfPresent(
+            [SlackRichTextNode].self,
+            forKey: .actions
         )) ?? nil
     }
 
@@ -275,6 +281,10 @@ struct SlackAttachmentDTO: Decodable {
         }
         let label = parts.count == 2 ? String(parts[1]) : target
         return (label.isEmpty ? target : label, url)
+    }
+
+    var messageActions: [SlackMessageAction] {
+        (actions ?? []).compactMap(\.messageAction)
     }
 }
 

@@ -332,6 +332,115 @@ struct MessageMediaTests {
     }
 
     @Test
+    func decodesBlockKitAndLegacyMessageButtons() throws {
+        let json = """
+        {
+          "ts": "1700000200.000100",
+          "subtype": "bot_message",
+          "bot_id": "B123",
+          "text": "Deployment ready",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {"type": "mrkdwn", "text": "Production is ready"},
+              "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Open Vercel"},
+                "url": "https://vercel.com/acme/deployments/42",
+                "action_id": "open_vercel",
+                "accessibility_label": "Open deployment 42 in Vercel"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {"type": "plain_text", "text": "Configure"},
+                  "action_id": "configure",
+                  "value": "deployment-42",
+                  "style": "primary"
+                },
+                {
+                  "type": "button",
+                  "text": {"type": "plain_text", "text": "Rollback"},
+                  "action_id": "rollback",
+                  "style": "danger",
+                  "confirm": {
+                    "title": {"type": "plain_text", "text": "Roll back?"},
+                    "text": {"type": "mrkdwn", "text": "This changes production."},
+                    "confirm": {"type": "plain_text", "text": "Roll back"},
+                    "deny": {"type": "plain_text", "text": "Cancel"},
+                    "style": "danger"
+                  }
+                },
+                {
+                  "type": "workflow_button",
+                  "text": {"type": "plain_text", "text": "Run workflow"},
+                  "action_id": "run_workflow",
+                  "workflow": {
+                    "trigger": {
+                      "url": "https://slack.com/shortcuts/Ft123/abc"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "attachments": [
+            {
+              "fallback": "Legacy deploy action",
+              "actions": [
+                {
+                  "type": "button",
+                  "name": "approve",
+                  "text": "Approve",
+                  "value": "deployment-42"
+                }
+              ]
+            }
+          ]
+        }
+        """
+        let dto = try JSONDecoder().decode(SlackMessageDTO.self, from: Data(json.utf8))
+        let message = dto.message(users: [:], currentUserID: "")
+
+        #expect(message.actions.map(\.label) == [
+            "Open Vercel",
+            "Configure",
+            "Rollback",
+            "Run workflow",
+            "Approve",
+        ])
+        #expect(
+            message.actions[0].destination
+                == URL(string: "https://vercel.com/acme/deployments/42")
+        )
+        #expect(
+            message.actions[0].accessibilityLabel
+                == "Open deployment 42 in Vercel"
+        )
+        #expect(message.actions[1].destination == nil)
+        #expect(message.actions[1].actionID == "configure")
+        #expect(message.actions[1].value == "deployment-42")
+        #expect(message.actions[1].style == .primary)
+        #expect(message.actions[2].style == .danger)
+        #expect(message.actions[2].confirmation?.title == "Roll back?")
+        #expect(message.actions[2].confirmation?.isDestructive == true)
+        #expect(
+            message.actions[3].destination
+                == URL(string: "https://slack.com/shortcuts/Ft123/abc")
+        )
+        #expect(message.actions[4].actionID == "approve")
+
+        let cached = try JSONDecoder().decode(
+            Message.self,
+            from: JSONEncoder().encode(message)
+        )
+        #expect(cached.actions == message.actions)
+    }
+
+    @Test
     func derivesFooterFromAttachmentContextBlocksWhenClassicFieldsMissing() throws {
         let json = """
         {

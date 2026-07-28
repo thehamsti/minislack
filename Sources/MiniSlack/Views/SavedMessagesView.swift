@@ -127,6 +127,7 @@ private struct SavedMessageRow: View {
                 if !message.attachments.isEmpty
                     || !message.files.isEmpty
                     || !message.images.isEmpty
+                    || !message.actions.isEmpty
                 {
                     MessageMediaView(
                         message: message,

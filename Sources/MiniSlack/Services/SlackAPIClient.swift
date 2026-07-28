@@ -1430,6 +1430,8 @@ struct SlackMessageDTO: Decodable {
             attachments: resolvedAttachments,
             files: (files ?? []).map(\.file),
             images: (blocks ?? []).compactMap(\.messageImage),
+            actions: Self.messageActions(from: blocks)
+                + (attachments ?? []).flatMap(\.messageActions),
             reactions: reactions?.map {
                 Reaction(
                     name: $0.name,
@@ -1535,6 +1537,21 @@ struct SlackMessageDTO: Decodable {
         }
         return (text, iconURL)
     }
+
+    private static func messageActions(
+        from blocks: [SlackRichTextNode]?
+    ) -> [SlackMessageAction] {
+        guard let blocks else {
+            return []
+        }
+        return blocks.flatMap { block in
+            let elements = block.type == "actions" || block.type == "context_actions"
+                ? block.elements ?? []
+                : []
+            return ((block.accessories ?? []) + elements)
+                .compactMap(\.messageAction)
+        }
+    }
 }
 
 struct SlackRichTextNode: Decodable {
@@ -1558,6 +1575,12 @@ struct SlackRichTextNode: Decodable {
     let slackFile: SlackImageBlockFileDTO?
     let elements: [SlackRichTextNode]?
     let fields: [SlackRichTextNode]?
+    let accessories: [SlackRichTextNode]?
+    let actionID: String?
+    let value: String?
+    let accessibilityLabel: String?
+    let confirmation: SlackConfirmationDTO?
+    let workflow: SlackWorkflowDTO?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1579,6 +1602,12 @@ struct SlackRichTextNode: Decodable {
         case slackFile = "slack_file"
         case elements
         case fields
+        case accessory
+        case actionID = "action_id"
+        case value
+        case accessibilityLabel = "accessibility_label"
+        case confirmation = "confirm"
+        case workflow
     }
 
     init(from decoder: Decoder) throws {
@@ -1613,12 +1642,72 @@ struct SlackRichTextNode: Decodable {
         )
         elements = try container.decodeIfPresent([SlackRichTextNode].self, forKey: .elements)
         fields = try container.decodeIfPresent([SlackRichTextNode].self, forKey: .fields)
+        accessories = try container.decodeIfPresent(
+            SlackRichTextNode.self,
+            forKey: .accessory
+        ).map { [$0] }
+        actionID = try container.decodeIfPresent(String.self, forKey: .actionID)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
+        accessibilityLabel = try container.decodeIfPresent(
+            String.self,
+            forKey: .accessibilityLabel
+        )
+        confirmation = try container.decodeIfPresent(
+            SlackConfirmationDTO.self,
+            forKey: .confirmation
+        )
+        workflow = try container.decodeIfPresent(SlackWorkflowDTO.self, forKey: .workflow)
     }
 
     var emoji: [SlackRichTextNode] {
-        let nested = ((elements ?? []) + (fields ?? [])).flatMap(\.emoji)
+        let nested = ((elements ?? []) + (fields ?? []) + (accessories ?? []))
+            .flatMap(\.emoji)
         return type == "emoji" ? [self] + nested : nested
     }
+
+    var messageAction: SlackMessageAction? {
+        guard type == "button" || type == "workflow_button",
+              let label = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !label.isEmpty
+        else {
+            return nil
+        }
+        let destination = (url ?? workflow?.trigger.url).flatMap(URL.init(string:))
+        let style = SlackMessageAction.Style(rawValue: listStyle ?? "") ?? .standard
+        return SlackMessageAction(
+            label: label,
+            accessibilityLabel: accessibilityLabel,
+            destination: destination,
+            actionID: actionID ?? name,
+            value: value,
+            style: style,
+            confirmation: confirmation.map {
+                SlackMessageAction.Confirmation(
+                    title: $0.title.text ?? "Confirm action",
+                    message: $0.text.text ?? "",
+                    confirmLabel: $0.confirm.text ?? "Continue",
+                    cancelLabel: $0.deny.text ?? "Cancel",
+                    isDestructive: $0.style == "danger"
+                )
+            }
+        )
+    }
+}
+
+struct SlackConfirmationDTO: Decodable {
+    let title: SlackTextObjectDTO
+    let text: SlackTextObjectDTO
+    let confirm: SlackTextObjectDTO
+    let deny: SlackTextObjectDTO
+    let style: String?
+}
+
+struct SlackWorkflowDTO: Decodable {
+    struct Trigger: Decodable {
+        let url: String?
+    }
+
+    let trigger: Trigger
 }
 
 struct SlackRichTextStyleDTO: Decodable {

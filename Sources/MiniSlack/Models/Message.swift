@@ -16,6 +16,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     let attachments: [MessageAttachment]
     let files: [MessageFile]
     let images: [MessageImage]
+    let actions: [SlackMessageAction]
     var reactions: [Reaction]
     let emojiUnicode: [String: String]
     var editedAt: Date?
@@ -40,6 +41,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         attachments: [MessageAttachment] = [],
         files: [MessageFile] = [],
         images: [MessageImage] = [],
+        actions: [SlackMessageAction] = [],
         reactions: [Reaction] = [],
         emojiUnicode: [String: String] = [:],
         editedAt: Date? = nil,
@@ -66,6 +68,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         self.attachments = attachments
         self.files = files
         self.images = images
+        self.actions = actions
         self.reactions = reactions
         self.emojiUnicode = emojiUnicode
         self.editedAt = editedAt
@@ -94,6 +97,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             attachments.compactMap(\.summary)
                 + files.map(\.displayName)
                 + images.map(\.altText)
+                + actions.map(\.label)
         )
         .joined(separator: "\n")
     }
@@ -111,6 +115,9 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         }
         if let image = images.first {
             return image.altText
+        }
+        if let action = actions.first {
+            return action.label
         }
         return integration.map { "Message from \($0.name)" } ?? "Slack message"
     }
@@ -142,6 +149,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
             },
             files: files,
             images: images,
+            actions: actions,
             reactions: reactions.map {
                 Reaction(
                     name: $0.name,
@@ -179,6 +187,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         case attachments
         case files
         case images
+        case actions
         case reactions
         case emojiUnicode
         case editedAt
@@ -222,6 +231,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         ) ?? []
         files = try container.decodeIfPresent([MessageFile].self, forKey: .files) ?? []
         images = try container.decodeIfPresent([MessageImage].self, forKey: .images) ?? []
+        actions = try container.decodeIfPresent(
+            [SlackMessageAction].self,
+            forKey: .actions
+        ) ?? []
         editedAt = try container.decodeIfPresent(Date.self, forKey: .editedAt)
         isDeleted = try container.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
         deliveryState = try container.decodeIfPresent(

@@ -5,6 +5,30 @@ struct MessageMediaSource: Codable, Hashable, Sendable {
     let requiresSlackAuthorization: Bool
 }
 
+struct SlackMessageAction: Codable, Hashable, Sendable {
+    enum Style: String, Codable, Hashable, Sendable {
+        case standard
+        case primary
+        case danger
+    }
+
+    struct Confirmation: Codable, Hashable, Sendable {
+        let title: String
+        let message: String
+        let confirmLabel: String
+        let cancelLabel: String
+        let isDestructive: Bool
+    }
+
+    let label: String
+    let accessibilityLabel: String?
+    let destination: URL?
+    let actionID: String?
+    let value: String?
+    let style: Style
+    let confirmation: Confirmation?
+}
+
 struct MessageFormattedText: Codable, Hashable, Sendable {
     let raw: String
     /// Plain text with entities resolved and mrkdwn markers stripped.

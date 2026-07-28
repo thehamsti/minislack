@@ -701,11 +701,24 @@ struct MessageRow: View {
                        !message.attachments.isEmpty
                            || !message.files.isEmpty
                            || !message.images.isEmpty
+                           || !message.actions.isEmpty
                    )
                 {
                     MessageMediaView(
                         message: message,
-                        customEmojiURLs: customEmojiURLs
+                        customEmojiURLs: customEmojiURLs,
+                        continueInSlack: {
+                            perform {
+                                guard let permalink = try await store.messagePermalink(
+                                    conversationID: conversationID,
+                                    messageID: message.id,
+                                    threadIdentifier: threadIdentifier
+                                ) else {
+                                    return
+                                }
+                                NSWorkspace.shared.open(permalink)
+                            }
+                        }
                     )
                 }
 
