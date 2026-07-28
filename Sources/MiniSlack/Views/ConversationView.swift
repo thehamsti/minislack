@@ -251,7 +251,7 @@ private struct MessageList: View {
             : conversation.messages
 
         ScrollViewReader { proxy in
-            GeometryReader { _ in
+            GeometryReader { viewport in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         if !findState.isSearching,
@@ -353,6 +353,7 @@ private struct MessageList: View {
                             updateScrollMetrics(
                                 isBottomVisible: isBottomVisible,
                                 contentHeight: contentHeight,
+                                viewportHeight: viewport.size.height,
                                 proxy: proxy
                             )
                         }
@@ -397,6 +398,7 @@ private struct MessageList: View {
                     updateScrollMetrics(
                         isBottomVisible: isBottomVisible,
                         contentHeight: metrics.contentHeight,
+                        viewportHeight: viewport.size.height,
                         proxy: proxy
                     )
                 }
@@ -458,12 +460,14 @@ private struct MessageList: View {
     private func updateScrollMetrics(
         isBottomVisible: Bool,
         contentHeight: CGFloat,
+        viewportHeight: CGFloat,
         proxy: ScrollViewProxy
     ) {
         self.isBottomVisible = isBottomVisible
         let needsReanchor = scrollState.updateMetrics(
             isBottomVisible: isBottomVisible,
-            contentHeight: contentHeight
+            contentHeight: contentHeight,
+            viewportHeight: viewportHeight
         )
         if needsReanchor, !findState.isSearching {
             proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)

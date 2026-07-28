@@ -13,6 +13,7 @@ struct ConversationScrollState: Equatable, Sendable {
     private(set) var pendingTarget: Target?
 
     private var contentHeight: CGFloat = 0
+    private var viewportHeight: CGFloat = 0
 
     /// Layout passes a target is re-applied for before it is treated as final.
     /// One `scrollTo` lands short while lazy rows are still resolving, and only
@@ -62,15 +63,18 @@ struct ConversationScrollState: Equatable, Sendable {
     }
 
     /// Records the latest list measurements. Returns true when the bottom needs
-    /// re-anchoring because content grew underneath a list that was pinned
-    /// there: media, rich text, and prepended history all resize rows after the
-    /// scroll landed, which must not be mistaken for the user scrolling away.
+    /// re-anchoring because layout moved the bottom underneath a pinned list:
+    /// media and history can grow the content, while composer or window changes
+    /// can resize the viewport. Neither should look like a manual scroll.
     mutating func updateMetrics(
         isBottomVisible: Bool,
-        contentHeight: CGFloat
+        contentHeight: CGFloat,
+        viewportHeight: CGFloat
     ) -> Bool {
-        let previousHeight = self.contentHeight
+        let previousContentHeight = self.contentHeight
+        let previousViewportHeight = self.viewportHeight
         self.contentHeight = contentHeight
+        self.viewportHeight = viewportHeight
         guard hasPositionedInitially else {
             return false
         }
@@ -78,7 +82,13 @@ struct ConversationScrollState: Equatable, Sendable {
             isAtBottom = true
             return false
         }
-        if contentHeight > previousHeight, isAtBottom || pendingTarget == .bottom {
+        let layoutMovedBottom =
+            contentHeight > previousContentHeight
+            || (
+                previousViewportHeight > 0
+                    && abs(viewportHeight - previousViewportHeight) > 0.5
+            )
+        if layoutMovedBottom, isAtBottom || pendingTarget == .bottom {
             return true
         }
         isAtBottom = false

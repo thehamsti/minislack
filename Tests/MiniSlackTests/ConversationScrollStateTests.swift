@@ -68,7 +68,11 @@ struct ConversationScrollStateTests {
         var state = ConversationScrollState()
         _ = state.initialTarget(lastMessageID: UUID(), focusedMessageID: nil)
         state.finishSettling()
-        _ = state.updateMetrics(isBottomVisible: true, contentHeight: 900)
+        _ = state.updateMetrics(
+            isBottomVisible: true,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
 
         #expect(state.latestMessageTarget(isSearching: false) == .bottom)
         #expect(state.pendingTarget == .bottom)
@@ -78,7 +82,8 @@ struct ConversationScrollStateTests {
         // Same content height with the anchor gone: the user scrolled up.
         let reanchorsOnManualScroll = state.updateMetrics(
             isBottomVisible: false,
-            contentHeight: 900
+            contentHeight: 900,
+            viewportHeight: 500
         )
 
         #expect(!reanchorsOnManualScroll)
@@ -99,13 +104,18 @@ struct ConversationScrollStateTests {
         var state = ConversationScrollState()
         _ = state.initialTarget(lastMessageID: UUID(), focusedMessageID: nil)
         state.finishSettling()
-        _ = state.updateMetrics(isBottomVisible: true, contentHeight: 900)
+        _ = state.updateMetrics(
+            isBottomVisible: true,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
 
         #expect(state.latestMessageTarget(isSearching: false) == .bottom)
 
         let reanchorsDuringRowLayout = state.updateMetrics(
             isBottomVisible: false,
-            contentHeight: 1_040
+            contentHeight: 1_040,
+            viewportHeight: 500
         )
 
         #expect(reanchorsDuringRowLayout)
@@ -119,7 +129,11 @@ struct ConversationScrollStateTests {
         let lastMessageID = UUID()
         _ = state.initialTarget(lastMessageID: lastMessageID, focusedMessageID: nil)
         state.finishSettling()
-        _ = state.updateMetrics(isBottomVisible: false, contentHeight: 0)
+        _ = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 0,
+            viewportHeight: 500
+        )
 
         #expect(
             state.focusTarget(
@@ -141,7 +155,8 @@ struct ConversationScrollStateTests {
         #expect(state.pendingTarget == .bottom)
         let reanchorsWhenLanded = state.updateMetrics(
             isBottomVisible: true,
-            contentHeight: 900
+            contentHeight: 900,
+            viewportHeight: 500
         )
 
         #expect(!reanchorsWhenLanded)
@@ -151,7 +166,8 @@ struct ConversationScrollStateTests {
         // A late-loading image pushes the anchor past the fold.
         let reanchorsOnGrowth = state.updateMetrics(
             isBottomVisible: false,
-            contentHeight: 1_040
+            contentHeight: 1_040,
+            viewportHeight: 500
         )
 
         #expect(reanchorsOnGrowth)
@@ -160,7 +176,8 @@ struct ConversationScrollStateTests {
 
         let reanchorsAfterCorrection = state.updateMetrics(
             isBottomVisible: true,
-            contentHeight: 1_040
+            contentHeight: 1_040,
+            viewportHeight: 500
         )
 
         #expect(!reanchorsAfterCorrection)
@@ -172,12 +189,21 @@ struct ConversationScrollStateTests {
         var state = ConversationScrollState()
         _ = state.focusTarget(lastMessageID: UUID(), focusedMessageID: nil)
         state.finishSettling()
-        _ = state.updateMetrics(isBottomVisible: true, contentHeight: 900)
-        _ = state.updateMetrics(isBottomVisible: false, contentHeight: 900)
+        _ = state.updateMetrics(
+            isBottomVisible: true,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
+        _ = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
 
         let reanchorsAfterScrollingAway = state.updateMetrics(
             isBottomVisible: false,
-            contentHeight: 1_400
+            contentHeight: 1_400,
+            viewportHeight: 500
         )
 
         #expect(!reanchorsAfterScrollingAway)
@@ -200,7 +226,8 @@ struct ConversationScrollStateTests {
         // Growth around a focused message must not yank the list to the bottom.
         let reanchorsWhileFocused = state.updateMetrics(
             isBottomVisible: false,
-            contentHeight: 1_200
+            contentHeight: 1_200,
+            viewportHeight: 500
         )
 
         #expect(!reanchorsWhileFocused)
@@ -213,6 +240,54 @@ struct ConversationScrollStateTests {
 
         #expect(state.pendingTarget == nil)
         #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: false))
+    }
+
+    @Test
+    func viewportResizeKeepsAPinnedListAtTheBottom() {
+        var state = ConversationScrollState()
+        _ = state.focusTarget(lastMessageID: UUID(), focusedMessageID: nil)
+        state.finishSettling()
+        _ = state.updateMetrics(
+            isBottomVisible: true,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
+
+        let reanchorsAfterComposerGrowth = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 900,
+            viewportHeight: 440
+        )
+
+        #expect(reanchorsAfterComposerGrowth)
+        #expect(state.isAtBottom)
+        #expect(!state.showsJumpToBottom(hasMessages: true, isSearching: false))
+    }
+
+    @Test
+    func viewportResizeDoesNotMoveAListTheUserScrolledAwayFromBottom() {
+        var state = ConversationScrollState()
+        _ = state.focusTarget(lastMessageID: UUID(), focusedMessageID: nil)
+        state.finishSettling()
+        _ = state.updateMetrics(
+            isBottomVisible: true,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
+        _ = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 900,
+            viewportHeight: 500
+        )
+
+        let reanchorsAfterResize = state.updateMetrics(
+            isBottomVisible: false,
+            contentHeight: 900,
+            viewportHeight: 440
+        )
+
+        #expect(!reanchorsAfterResize)
+        #expect(state.showsJumpToBottom(hasMessages: true, isSearching: false))
     }
 
     @Test
